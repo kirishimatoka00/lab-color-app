@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- Mobile App Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#1e1e24">
+    <title>Lab 色域模擬器</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Import Maps -->
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "three": "https://esm.sh/three@0.160.0",
+                "three/examples/jsm/geometries/ConvexGeometry": "https://esm.sh/three@0.160.0/examples/jsm/geometries/ConvexGeometry.js?external=three",
+                "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.16?external=react,react-dom,three",
+                "@react-three/drei": "https://esm.sh/@react-three/drei@9.99.0?external=react,react-dom,three,@react-three/fiber",
+                "lucide-react": "https://esm.sh/lucide-react@0.309.0?external=react",
+                "uuid": "https://esm.sh/uuid@9.0.1"
+            }
+        }
+    </script>
+
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background-color: #1e1e24; -webkit-tap-highlight-color: transparent; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* Animation */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .tooltip-animate { animation: fadeIn 0.2s ease-out forwards; }
+
+        /* Prevent pull-to-refresh on mobile */
+        body { overscroll-behavior-y: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useMemo, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Canvas, useThree } from '@react-three/fiber';
+        import { OrbitControls, MapControls, Text, Html, Billboard } from '@react-three/drei';
+        import * as THREE from 'three';
+        import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry';
+        import { Plus, Trash2, RotateCcw, Info, Box, Camera, Maximize, Minimize, Tag, Eye, EyeOff, LayoutTemplate, Square, Circle, Target, X, Aperture, Upload, Image as ImageIcon } from 'lucide-react';
+
+        /**
+         * Math & Color Utility Functions
+         */
+        const ColorUtils = {
+            clamp: (num, min, max) => Math.min(Math.max(num, min), max),
+
+            // Lab to XYZ
+            labToXyz: (l, a, b) => {
+                let y = (l + 16) / 116;
+                let x = a / 500 + y;
+                let z = y - b / 200;
+
+                const targetX = 0.95047;
+                const targetY = 1.00000;
+                const targetZ = 1.08883;
+
+                const pow3 = (v) => {
+                    return (v > 0.206893034) ? v * v * v : (v - 16 / 116) / 7.787;
+                };
+
+                const X = targetX * pow3(x);
+                const Y = targetY * pow3(y);
+                const Z = targetZ * pow3(z);
+
+                return [X, Y, Z];
+            },
+
+            // XYZ to Linear RGB
+            xyzToRgbLinear: (x, y, z) => {
+                const rLinear = x * 3.2406 + y * -1.5372 + z * -0.4986;
+                const gLinear = x * -0.9689 + y * 1.8758 + z * 0.0415;
+                const bLinear = x * 0.0557 + y * -0.2040 + z * 1.0570;
+                return [rLinear, gLinear, bLinear];
+            },
+
+            // XYZ to RGB (sRGB) [0-255]
+            xyzToRgb: (x, y, z) => {
+                const [rL, gL, bL] = ColorUtils.xyzToRgbLinear(x, y, z);
+                
+                const adjust = (v) => {
+                    return v > 0.0031308
+                        ? 1.055 * Math.pow(v, 1.0 / 2.4) - 0.055
+                        : 12.92 * v;
+                };
+
+                const R = Math.round(ColorUtils.clamp(adjust(rL), 0, 1) * 255);
+                const G = Math.round(ColorUtils.clamp(adjust(gL), 0, 1) * 255);
+                const B = Math.round(ColorUtils.clamp(adjust(bL), 0, 1) * 255);
+
+                return `rgb(${R}, ${G}, ${B})`;
+            },
+
+            // RGB to Lab
+            rgbToLab: (r, g, b) => {
+                let R = r / 255;
+                let G = g / 255;
+                let B = b / 255;
+
+                R = (R > 0.04045) ? Math.pow((R + 0.055) / 1.055, 2.4) : R / 12.92;
+                G = (G > 0.04045) ? Math.pow((G + 0.055) / 1.055, 2.4) : G / 12.92;
+                B = (B > 0.04045) ? Math.pow((B + 0.055) / 1.055, 2.4) : B / 12.92;
+
+                let X = R * 0.4124 + G * 0.3576 + B * 0.1805;
+                let Y = R * 0.2126 + G * 0.7152 + B * 0.0722;
+                let Z = R * 0.0193 + G * 0.1192 + B * 0.9505;
+
+                const refX = 0.95047;
+                const refY = 1.00000;
+                const refZ = 1.08883;
+
+                X = X / refX;
+                Y = Y / refY;
+                Z = Z / refZ;
+
+                const f = (val) => (val > 0.008856) ? Math.pow(val, 1/3) : (7.787 * val) + (16/116);
+
+                const fx = f(X);
+                const fy = f(Y);
+                const fz = f(Z);
+
+                const L = (116 * fy) - 16;
+                const a = 500 * (fx - fy);
+                const B_lab = 200 * (fy - fz);
+
+                return {
+                    l: Math.round(L * 10) / 10,
+                    a: Math.round(a * 10) / 10,
+                    b: Math.round(B_lab * 10) / 10
+                };
+            },
+
+            // Helper: Lab to [r,g,b] normalized (0-1)
+            labToRgbNormalized: (l, a, b) => {
+                const [x, y, z] = ColorUtils.labToXyz(l, a, b);
+                const [rL, gL, bL] = ColorUtils.xyzToRgbLinear(x, y, z);
+                
+                const adjust = (v) => {
+                    return v > 0.0031308
+                        ? 1.055 * Math.pow(v, 1.0 / 2.4) - 0.055
+                        : 12.92 * v;
+                };
+
+                return [
+                    ColorUtils.clamp(adjust(rL), 0, 1),
+                    ColorUtils.clamp(adjust(gL), 0, 1),
+                    ColorUtils.clamp(adjust(bL), 0, 1)
+                ];
+            },
+
+            labToHex: (l, a, b) => {
+                const [x, y, z] = ColorUtils.labToXyz(l, a, b);
+                return ColorUtils.xyzToRgb(x, y, z);
+            },
+
+            calculateDeltaE: (p1, p2) => {
+                const dL = p1.l - p2.l;
+                const da = p1.a - p2.a;
+                const db = p1.b - p2.b;
+                return Math.sqrt(dL * dL + da * da + db * db).toFixed(2);
+            }
+        };
+
+        /**
+         * Camera Color Picker
+         */
+        const CameraPicker = ({ onCapture, onClose }) => {
+            const videoRef = useRef(null);
+            const canvasRef = useRef(null);
+            const imgRef = useRef(null);
+            const fileInputRef = useRef(null);
+
+            const [color, setColor] = useState({ r: 0, g: 0, b: 0 });
+            const [lab, setLab] = useState({ l: 0, a: 0, b: 0 });
+            const [stream, setStream] = useState(null);
+            const [error, setError] = useState('');
+            const [imageMode, setImageMode] = useState(false);
+            const [uploadedImgSrc, setUploadedImgSrc] = useState(null);
+            const [pointerPos, setPointerPos] = useState(null);
+            const [isLocalFile, setIsLocalFile] = useState(window.location.protocol === 'file:');
+
+            useEffect(() => {
+                const startCamera = async () => {
+                    if (isLocalFile) {
+                        setError("瀏覽器安全限制：本機檔案 (file://) 無法使用即時鏡頭。\n請使用下方按鈕進行拍照或上傳圖片。");
+                        return;
+                    }
+                    try {
+                        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                            throw new Error("Browser API not supported");
+                        }
+                        const s = await navigator.mediaDevices.getUserMedia({
+                            video: { facingMode: 'environment' },
+                            audio: false
+                        });
+                        setStream(s);
+                        if (videoRef.current) {
+                            videoRef.current.srcObject = s;
+                        }
+                    } catch (err) {
+                        console.warn("Camera access failed", err);
+                        setError("無法啟動相機。原因可能為：\n1. 瀏覽器安全限制 (需 HTTPS)\n2. 權限被拒絕\n請使用下方「上傳/拍照」按鈕。");
+                    }
+                };
+                if (!imageMode) startCamera();
+                return () => { if (stream) stream.getTracks().forEach(track => track.stop()); };
+            }, [imageMode, isLocalFile]);
+
+            useEffect(() => {
+                if (!stream || imageMode) return;
+                const interval = setInterval(() => {
+                    if (videoRef.current && canvasRef.current) {
+                        const video = videoRef.current;
+                        const canvas = canvasRef.current;
+                        const context = canvas.getContext('2d');
+                        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                            const centerX = Math.floor(canvas.width / 2);
+                            const centerY = Math.floor(canvas.height / 2);
+                            const pixelData = context.getImageData(centerX, centerY, 1, 1).data;
+                            const r = pixelData[0]; const g = pixelData[1]; const b = pixelData[2];
+                            setColor({ r, g, b });
+                            setLab(ColorUtils.rgbToLab(r, g, b));
+                        }
+                    }
+                }, 100);
+                return () => clearInterval(interval);
+            }, [stream, imageMode]);
+
+            const handleCaptureClick = () => { onCapture(lab); onClose(); };
+            const triggerFileInput = () => fileInputRef.current && fileInputRef.current.click();
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (evt) => {
+                        setUploadedImgSrc(evt.target.result);
+                        setImageMode(true);
+                        setError('');
+                        if (stream) { stream.getTracks().forEach(track => track.stop()); setStream(null); }
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+            const handleImageClick = (e) => {
+                if (!imgRef.current || !canvasRef.current) return;
+                const img = imgRef.current;
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                ctx.drawImage(img, 0, 0);
+                const rect = img.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const scaleX = img.naturalWidth / rect.width;
+                const scaleY = img.naturalHeight / rect.height;
+                const naturalX = Math.floor(x * scaleX);
+                const naturalY = Math.floor(y * scaleY);
+                const pixelData = ctx.getImageData(naturalX, naturalY, 1, 1).data;
+                const r = pixelData[0]; const g = pixelData[1]; const b = pixelData[2];
+                setColor({ r, g, b });
+                setLab(ColorUtils.rgbToLab(r, g, b));
+                setPointerPos({ x: e.clientX, y: e.clientY });
+            };
+
+            return (
+                <div className="fixed inset-0 z-50 bg-black flex flex-col">
+                    <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
+                        {imageMode ? (
+                            <div className="relative w-full h-full flex items-center justify-center bg-gray-900 cursor-crosshair">
+                                <img ref={imgRef} src={uploadedImgSrc} className="max-w-full max-h-full object-contain" onClick={handleImageClick} alt="Uploaded" />
+                                {pointerPos && (
+                                    <div className="fixed w-8 h-8 border-2 border-white rounded-full pointer-events-none transform -translate-x-1/2 -translate-y-1/2 shadow-[0_0_10px_rgba(0,0,0,0.8)]" style={{ left: pointerPos.x, top: pointerPos.y, backgroundColor: `rgb(${color.r},${color.g},${color.b})` }}></div>
+                                )}
+                                <div className="absolute top-6 bg-black/70 text-white px-4 py-2 rounded-full text-sm pointer-events-none backdrop-blur-md shadow-lg border border-white/10">👆 點擊照片任意位置取色</div>
+                            </div>
+                        ) : (
+                            <>
+                                {error ? (
+                                    <div className="text-white p-8 text-center max-w-sm flex flex-col items-center animate-pulse">
+                                        <Camera size={64} className="mb-6 text-gray-500 opacity-80" />
+                                        <p className="font-bold mb-3 text-xl">相機模式</p>
+                                        <p className="text-sm text-gray-400 mb-8 whitespace-pre-line leading-relaxed">{error}</p>
+                                        <button onClick={triggerFileInput} className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white px-8 py-4 rounded-full font-bold flex items-center gap-3 shadow-xl transition-all"><ImageIcon size={24} /> 選擇照片 / 啟動相機</button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <video ref={videoRef} autoPlay playsInline className="absolute w-full h-full object-cover" />
+                                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                            <div className="w-16 h-16 border-2 border-white/70 rounded-full flex items-center justify-center shadow-lg"><div className="w-1 h-6 bg-white/90"></div><div className="h-1 w-6 bg-white/90 absolute"></div></div>
+                                        </div>
+                                        <div className="absolute top-6 left-0 right-0 text-center pointer-events-none"><span className="bg-black/60 text-white/90 px-4 py-1.5 rounded-full text-xs backdrop-blur-sm border border-white/10">⚠ 數值受環境光影響，僅供參考</span></div>
+                                    </>
+                                )}
+                            </>
+                        )}
+                        <canvas ref={canvasRef} className="hidden" />
+                        <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileUpload} />
+                    </div>
+                    <div className="bg-gray-900 p-5 pb-10 flex flex-col gap-5 border-t border-gray-800">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-4">
+                                <div className="w-14 h-14 rounded-full border-2 border-white shadow-lg transition-colors duration-200" style={{ backgroundColor: `rgb(${color.r}, ${color.g}, ${color.b})` }}></div>
+                                <div className="flex flex-col text-white">
+                                    <span className="text-xs text-gray-400 font-mono tracking-wider">RGB: {color.r}, {color.g}, {color.b}</span>
+                                    <span className="font-mono font-bold text-xl text-yellow-400 tracking-tight">L{lab.l} a{lab.a} b{lab.b}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-4">
+                            <button onClick={onClose} className="bg-gray-800 active:bg-gray-700 text-white py-3.5 rounded-xl font-bold text-sm transition-colors">取消</button>
+                            <button onClick={triggerFileInput} className="bg-gray-800 active:bg-gray-700 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 cursor-pointer text-sm transition-colors"><ImageIcon size={18} /><span>相簿/拍照</span></button>
+                            <button onClick={handleCaptureClick} className="bg-blue-600 active:bg-blue-500 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 text-sm transition-colors shadow-lg shadow-blue-900/30"><CheckSquare size={18} /><span>確認採用</span></button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 3D/2D Components
+        const AxesSystem3D = () => (
+            <group>
+                <line><bufferGeometry attach="geometry" {...new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 110, 0)])} /><lineBasicMaterial attach="material" color="#888" opacity={0.5} transparent /></line>
+                <Billboard position={[0, 115, 0]}><Text fontSize={4} color="black" outlineWidth={0.2} outlineColor="white">L</Text></Billboard>
+                <line><bufferGeometry attach="geometry" {...new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-130, 0, 0), new THREE.Vector3(130, 0, 0)])} /><lineBasicMaterial attach="material" color="#ff0000" opacity={0.3} transparent /></line>
+                <Billboard position={[140, 0, 0]}><Text fontSize={4} color="#cc0000" outlineWidth={0.2} outlineColor="white">+a</Text></Billboard>
+                <Billboard position={[-140, 0, 0]}><Text fontSize={4} color="#00aa00" outlineWidth={0.2} outlineColor="white">-a</Text></Billboard>
+                <line><bufferGeometry attach="geometry" {...new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -130), new THREE.Vector3(0, 0, 130)])} /><lineBasicMaterial attach="material" color="#0000ff" opacity={0.3} transparent /></line>
+                <Billboard position={[0, 0, 140]}><Text fontSize={4} color="#aaaa00" outlineWidth={0.2} outlineColor="white">+b</Text></Billboard>
+                <Billboard position={[0, 0, -140]}><Text fontSize={4} color="#0000cc" outlineWidth={0.2} outlineColor="white">-b</Text></Billboard>
+            </group>
+        );
+
+        const AxesSystem2D = () => (
+            <group>
+                <line><bufferGeometry attach="geometry" {...new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-130, 0, 0), new THREE.Vector3(130, 0, 0)])} /><lineBasicMaterial attach="material" color="#ff0000" opacity={0.5} transparent /></line>
+                <Text position={[140, 0, 0]} fontSize={4} color="#cc0000" outlineWidth={0.2} outlineColor="white">+a</Text>
+                <Text position={[-140, 0, 0]} fontSize={4} color="#00aa00" outlineWidth={0.2} outlineColor="white">-a</Text>
+                <line><bufferGeometry attach="geometry" {...new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -130, 0), new THREE.Vector3(0, 130, 0)])} /><lineBasicMaterial attach="material" color="#0000ff" opacity={0.5} transparent /></line>
+                <Text position={[0, 140, 0]} fontSize={4} color="#aaaa00" outlineWidth={0.2} outlineColor="white">+b</Text>
+                <Text position={[0, -140, 0]} fontSize={4} color="#0000cc" outlineWidth={0.2} outlineColor="white">-b</Text>
+            </group>
+        );
+
+        const LabPoint = ({ l, a, b, name, isTestPoint = false, id, showLabels, typeLabel, mode = '3d', deltaE, isStandard }) => {
+            const color = ColorUtils.labToHex(l, a, b);
+            const position = mode === '2d' ? [a, b, 0] : [a, l, b];
+            const [hovered, setHover] = useState(false);
+            const hasName = name && name.trim().length > 0;
+            const labelVisible = showLabels && (hasName || isTestPoint);
+            let defaultLabel = isTestPoint ? "測試點" : (typeLabel || "端點");
+            let labelText = hasName ? name : defaultLabel;
+            if (isStandard) labelText += " (Std)";
+            else if (deltaE) labelText += ` (ΔE: ${deltaE})`;
+
+            return (
+                <group position={position}>
+                    <mesh onPointerOver={(e) => { e.stopPropagation(); setHover(true); }} onPointerOut={(e) => setHover(false)}>
+                        {isTestPoint ? <boxGeometry args={[5, 5, 5]} /> : <sphereGeometry args={[3, 32, 32]} />}
+                        <meshStandardMaterial color={color} emissive={isStandard ? "#ffff00" : (isTestPoint ? "#ffffff" : "#000000")} emissiveIntensity={isStandard ? 0.3 : (isTestPoint && hovered ? 0.5 : 0)} />
+                        {isTestPoint && <lineSegments><edgesGeometry args={[new THREE.BoxGeometry(5, 5, 5)]} /><lineBasicMaterial color={isStandard ? "#ffff00" : "white"} opacity={isStandard ? 0.8 : 0.5} transparent /></lineSegments>}
+                        {isStandard && <lineSegments rotation={[mode === '2d' ? 0 : Math.PI/2, 0, 0]}><edgesGeometry args={[new THREE.CylinderGeometry(6, 6, 0.5, 16)]} /><lineBasicMaterial color="#ffff00" /></lineSegments>}
+                    </mesh>
+                    {labelVisible && labelText && (
+                        mode === '3d' ? <Billboard position={[0, 6, 0]}><Text fontSize={3} color={isTestPoint ? "#d8b4fe" : "white"} outlineWidth={0.15} outlineColor="black" anchorY="bottom">{labelText}</Text></Billboard> 
+                        : <Text position={[0, 6, 0]} fontSize={3} color={isTestPoint ? "#581c87" : "#1e293b"} outlineWidth={0.2} outlineColor="white" anchorY="bottom">{labelText}</Text>
+                    )}
+                    <Html distanceFactor={200} zIndexRange={[100, 0]} style={{ pointerEvents: 'none', opacity: hovered ? 1 : 0, transition: 'opacity 0.2s' }}>
+                        <div className={`tooltip-animate px-2 py-1 rounded text-xs whitespace-nowrap border shadow-xl transform -translate-x-1/2 -translate-y-full mt-[-10px] ${isTestPoint ? 'bg-purple-900 text-white border-purple-500' : 'bg-gray-800 text-white border-gray-600'}`}>
+                            <strong>{name || defaultLabel} {isStandard ? "(Standard)" : ""}</strong><br/>L:{l} a:{a} b:{b}<br/>{deltaE && <span className="text-yellow-300">ΔE: {deltaE}</span>}
+                        </div>
+                    </Html>
+                </group>
+            );
+        };
+
+        const GamutVolume = ({ points, mode = '3d' }) => {
+            const { geometry } = useMemo(() => {
+                if (points.length < 3) return { geometry: null };
+                const vectors = points.map(p => mode === '2d' ? new THREE.Vector3(p.a, p.b, 0) : new THREE.Vector3(p.a, p.l, p.b));
+                let geo;
+                try {
+                    geo = new ConvexGeometry(vectors);
+                    const count = geo.attributes.position.count;
+                    const colors = [];
+                    const pos = geo.attributes.position;
+                    for(let i = 0; i < count; i++) {
+                        const x = pos.getX(i); const y = pos.getY(i); const z = pos.getZ(i);
+                        let minD = Infinity; let closest = points[0];
+                        for(let p of points) {
+                            let d;
+                            if (mode === '2d') d = (p.a - x)**2 + (p.b - y)**2;
+                            else d = (p.a - x)**2 + (p.l - y)**2 + (p.b - z)**2;
+                            if(d < minD) { minD = d; closest = p; }
+                        }
+                        const rgb = ColorUtils.labToRgbNormalized(closest.l, closest.a, closest.b);
+                        colors.push(rgb[0], rgb[1], rgb[2]);
+                    }
+                    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                } catch (e) { return { geometry: null }; }
+                return { geometry: geo };
+            }, [points, mode]);
+            if (!geometry) return null;
+            return <group><mesh geometry={geometry}><meshBasicMaterial vertexColors={true} transparent={true} opacity={0.6} side={THREE.DoubleSide} depthWrite={false} /></mesh></group>;
+        };
+
+        const ViewContainer = ({ children, title, onFullscreen, onCapture, onToggleLabels, showLabels }) => {
+            const containerRef = useRef(null);
+            const handleFullscreen = () => {
+                const elem = containerRef.current; if (!elem) return;
+                const isFs = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+                if (!isFs) { if (elem.requestFullscreen) elem.requestFullscreen(); else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen(); else if (elem.msRequestFullscreen) elem.msRequestFullscreen(); } 
+                else { if (document.exitFullscreen) document.exitFullscreen(); else if (document.webkitExitFullscreen) document.webkitExitFullscreen(); else if (document.msExitFullscreen) document.msExitFullscreen(); }
+            };
+            return (
+                <div ref={containerRef} className="relative w-full h-full bg-[#1e1e24] overflow-hidden group border-b border-white/5 last:border-0" style={{touchAction: 'none'}}>
+                    <div className="absolute top-4 left-4 z-20 pointer-events-none select-none"><div className="bg-black/40 backdrop-blur-md text-white/90 text-sm font-bold px-3 py-1.5 rounded-lg border border-white/10 shadow-lg">{title}</div></div>
+                    <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 opacity-90 transition-opacity">
+                        <button onClick={onToggleLabels} className={`p-2 rounded-lg shadow-lg backdrop-blur-md border transition-all active:scale-95 ${showLabels ? 'bg-blue-600 text-white border-blue-500' : 'bg-black/40 text-white/70 border-white/10 hover:bg-white/10'}`}><Tag size={18} /></button>
+                        <button onClick={onCapture} className="p-2 bg-black/40 hover:bg-white/10 text-white/70 backdrop-blur-md rounded-lg shadow-lg border border-white/10 transition-all active:scale-95"><Camera size={18} /></button>
+                        <button onClick={handleFullscreen} className="p-2 bg-black/40 hover:bg-white/10 text-white/70 backdrop-blur-md rounded-lg shadow-lg border border-white/10 transition-all active:scale-95"><Maximize size={18} /></button>
+                    </div>
+                    {children}
+                </div>
+            );
+        };
+
+        const ScreenshotHandler = ({ captureRef }) => {
+            const { gl, scene, camera } = useThree();
+            useEffect(() => {
+                if (captureRef) {
+                    captureRef.current = async () => {
+                        const originalSize = new THREE.Vector2(); gl.getSize(originalSize); const originalAspect = camera.aspect;
+                        gl.setSize(1200, 1200); if (!camera.isOrthographicCamera) { camera.aspect = 1; camera.updateProjectionMatrix(); }
+                        gl.render(scene, camera); const dataUrl = gl.domElement.toDataURL('image/png');
+                        gl.setSize(originalSize.width, originalSize.height); if (!camera.isOrthographicCamera) { camera.aspect = originalAspect; } camera.updateProjectionMatrix(); gl.render(scene, camera);
+                        try {
+                            if ('showSaveFilePicker' in window) { const blob = await (await fetch(dataUrl)).blob(); const handle = await window.showSaveFilePicker({ suggestedName: `lab-view-${Date.now()}.png`, types: [{ description: 'PNG Image', accept: { 'image/png': ['.png'] } }] }); const writable = await handle.createWritable(); await writable.write(blob); await writable.close(); } 
+                            else { const link = document.createElement('a'); link.download = `lab-view-${Date.now()}.png`; link.href = dataUrl; link.click(); }
+                        } catch (err) {}
+                    };
+                }
+            }, [gl, scene, camera, captureRef]);
+            return null;
+        };
+
+        const Scene3D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels }) => {
+            const gamutPoints = useMemo(() => [...basePoints.filter(p=>p.visible!==false), ...historyPoints.filter(p=>p.visible!==false)], [basePoints, historyPoints]);
+            const renderBase = useMemo(() => basePoints.filter(p => p.showPoint !== false), [basePoints]);
+            const renderHistory = useMemo(() => historyPoints.filter(p => p.showPoint !== false), [historyPoints]);
+            const renderTest = useMemo(() => testPoints.filter(p => p.showPoint !== false), [testPoints]);
+            return (
+                <>
+                    <ScreenshotHandler captureRef={captureRef} />
+                    <ambientLight intensity={1.5} />
+                    <pointLight position={[200, 200, 200]} intensity={1} />
+                    <pointLight position={[-200, -200, -200]} intensity={0.5} />
+                    <OrbitControls makeDefault target={[0, 50, 0]} dampingFactor={0.1} />
+                    <AxesSystem3D />
+                    {renderBase.map((p) => <LabPoint key={p.id} {...p} mode="3d" showLabels={showLabels} typeLabel="基礎" />)}
+                    {renderHistory.map((p) => <LabPoint key={p.id} {...p} mode="3d" showLabels={showLabels} typeLabel="歷史" />)}
+                    {renderTest.map((p) => <LabPoint key={p.id} {...p} mode="3d" isTestPoint={true} showLabels={showLabels} />)}
+                    <GamutVolume points={gamutPoints} mode="3d" />
+                </>
+            );
+        };
+
+        const Scene2D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels }) => {
+            const gamutPoints = useMemo(() => [...basePoints.filter(p=>p.visible!==false), ...historyPoints.filter(p=>p.visible!==false)], [basePoints, historyPoints]);
+            const renderBase = useMemo(() => basePoints.filter(p => p.showPoint !== false), [basePoints]);
+            const renderHistory = useMemo(() => historyPoints.filter(p => p.showPoint !== false), [historyPoints]);
+            const renderTest = useMemo(() => testPoints.filter(p => p.showPoint !== false), [testPoints]);
+            return (
+                <>
+                    <ScreenshotHandler captureRef={captureRef} />
+                    <ambientLight intensity={1.5} />
+                    <directionalLight position={[0, 0, 100]} intensity={1} />
+                    <MapControls makeDefault screenSpacePanning={true} minZoom={0.5} maxZoom={5} dampingFactor={0.1} />
+                    <AxesSystem2D />
+                    {renderBase.map((p) => <LabPoint key={p.id} {...p} mode="2d" showLabels={showLabels} typeLabel="基礎" />)}
+                    {renderHistory.map((p) => <LabPoint key={p.id} {...p} mode="2d" showLabels={showLabels} typeLabel="歷史" />)}
+                    {renderTest.map((p) => <LabPoint key={p.id} {...p} mode="2d" isTestPoint={true} showLabels={showLabels} />)}
+                    <GamutVolume points={gamutPoints} mode="2d" />
+                </>
+            );
+        };
+
+        const InputRow = ({ point, onChange, onDelete, isTestPoint = false, inputColorClass = 'text-blue-700', deltaE, isStandard, onToggleStandard }) => {
+            const colorPreview = ColorUtils.labToHex(point.l, point.a, point.b);
+            const handleChange = (field, value) => {
+                if (field === 'name' || field === 'visible' || field === 'showPoint') { onChange(point.id, field, value); return; }
+                let val = parseFloat(value); if(isNaN(val)) val = 0;
+                if (field === 'l') val = ColorUtils.clamp(val, 0, 100); if (field === 'a' || field === 'b') val = ColorUtils.clamp(val, -128, 127);
+                onChange(point.id, field, val);
+            };
+            return (
+                <div className={`flex flex-col mb-2 bg-white p-2 rounded-lg shadow-sm border group transition-colors ${isStandard ? 'border-yellow-400 bg-yellow-50' : 'border-gray-100 hover:border-blue-300'}`}>
+                    <div className="mb-2 flex items-center border-b border-gray-100 pb-1">
+                        <div className="mr-2 flex items-center gap-1 border-r border-gray-100 pr-2">
+                            {isTestPoint ? (
+                                <>
+                                    <button onClick={() => onToggleStandard(point.id)} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${isStandard ? 'text-red-500 hover:text-red-600 bg-red-50' : 'text-gray-300 hover:text-red-400'}`} title={isStandard ? "取消標準點" : "設為標準點"}><Target size={16} fill={isStandard ? "currentColor" : "none"} /></button>
+                                    <button onClick={() => handleChange('showPoint', !(point.showPoint !== false))} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${point.showPoint !== false ? 'text-gray-600 hover:text-gray-800' : 'text-gray-300 hover:text-gray-400'}`} title="顯示"><Eye size={16} /></button>
+                                </>
+                            ) : (
+                                <>
+                                    <label className="cursor-pointer text-gray-400 hover:text-blue-600 transition-colors w-6 h-6 flex items-center justify-center">
+                                        <input type="checkbox" checked={point.visible !== false} onChange={(e) => handleChange('visible', e.target.checked)} className="sr-only" />
+                                        {point.visible !== false ? <div className="w-4 h-4 bg-blue-100 text-blue-600 rounded flex items-center justify-center"><CheckSquare size={14} /></div> : <div className="w-4 h-4 border border-gray-300 rounded hover:border-blue-400"></div>}
+                                    </label>
+                                    <button onClick={() => handleChange('showPoint', !(point.showPoint !== false))} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${point.showPoint !== false ? 'text-gray-600 hover:text-gray-800' : 'text-gray-300 hover:text-gray-400'}`}><Eye size={16} /></button>
+                                </>
+                            )}
+                        </div>
+                        <span className="text-[10px] text-gray-400 font-bold mr-1">名稱:</span>
+                        <input type="text" placeholder="名稱" value={point.name || ''} onChange={(e) => handleChange('name', e.target.value)} className={`w-16 text-xs font-medium focus:outline-none placeholder-gray-300 bg-transparent ${inputColorClass}`} />
+                        {isTestPoint && !isStandard && deltaE && <div className="ml-auto bg-gray-100 px-1.5 py-0.5 rounded text-[10px] font-mono text-gray-600 flex items-center"><span className="font-bold text-gray-400 mr-1">ΔE</span><span className={parseFloat(deltaE) > 5 ? "text-red-500 font-bold" : "text-gray-800"}>{deltaE}</span></div>}
+                        {isStandard && <div className="ml-auto bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded text-[10px] font-bold">STD</div>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-md border border-gray-200 shadow-inner flex-shrink-0" style={{ backgroundColor: colorPreview }} title={`Preview: ${colorPreview}`} />
+                        <div className="grid grid-cols-3 gap-2 flex-grow">
+                            {['l', 'a', 'b'].map(field => (
+                                <div key={field} className="flex flex-col relative">
+                                    <label className="absolute -top-1.5 left-1 text-[8px] bg-white px-0.5 text-gray-400 font-bold uppercase tracking-wider pointer-events-none">{field}</label>
+                                    <input type="number" value={point[field]} onChange={(e) => handleChange(field, e.target.value)} className={`w-full text-center text-sm border border-gray-200 rounded py-1 px-0.5 focus:border-blue-500 focus:outline-none transition-all focus:bg-white ${point.visible === false ? 'bg-gray-50 text-gray-500' : 'bg-gray-50'}`} />
+                                </div>
+                            ))}
+                        </div>
+                        <button onClick={() => onDelete(point.id)} className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-full transition-all"><Trash2 size={14} /></button>
+                    </div>
+                </div>
+            );
+        };
+
+        const CheckSquare = ({size}) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
+        );
+
+        function App() {
+            const getInitialData = (key, fallback) => { try { const item = window.localStorage.getItem(key); return item ? JSON.parse(item) : fallback; } catch (error) { return fallback; } };
+            const [basePoints, setBasePoints] = useState(() => getInitialData('lab_basePoints', [{ id: 1, l: 80, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 2, l: 20, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 3, l: 50, a: 80, b: 60, name: '', visible: true, showPoint: true }, { id: 4, l: 50, a: -60, b: -40, name: '', visible: true, showPoint: true }]));
+            const [historyPoints, setHistoryPoints] = useState(() => getInitialData('lab_historyPoints', [{ id: 501, l: 60, a: 40, b: -20, name: 'Old Mix', visible: true, showPoint: true }]));
+            const [testPoints, setTestPoints] = useState(() => getInitialData('lab_testPoints', [{ id: 101, l: 55, a: 10, b: 10, name: 'Sample A', showPoint: true, isStandard: false }, { id: 102, l: 50, a: 15, b: 5, name: 'Sample B', showPoint: true, isStandard: false }]));
+            const [showLabels, setShowLabels] = useState(false);
+            const [viewMode, setViewMode] = useState('split');
+            const [showCamera, setShowCamera] = useState(false);
+            
+            useEffect(() => { window.localStorage.setItem('lab_basePoints', JSON.stringify(basePoints)); window.localStorage.setItem('lab_historyPoints', JSON.stringify(historyPoints)); window.localStorage.setItem('lab_testPoints', JSON.stringify(testPoints)); }, [basePoints, historyPoints, testPoints]);
+            
+            const capture3DRef = useRef(null); const capture2DRef = useRef(null);
+            const addPoint = (type) => { const newPoint = { id: Date.now(), l: 50, a: 0, b: 0, name: '', visible: true, showPoint: true, isStandard: false }; if (type === 'base') setBasePoints([...basePoints, newPoint]); else if (type === 'history') setHistoryPoints([...historyPoints, newPoint]); else setTestPoints([...testPoints, newPoint]); };
+            const addFromCamera = (labData) => { const newPoint = { id: Date.now(), l: labData.l, a: labData.a, b: labData.b, name: 'Cam Capture', visible: true, showPoint: true, isStandard: false }; setTestPoints([...testPoints, newPoint]); };
+            const updatePoint = (listType, id, field, value) => { let setter = listType === 'base' ? setBasePoints : (listType === 'history' ? setHistoryPoints : setTestPoints); setter(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p)); };
+            const toggleStandard = (id) => { setTestPoints(prev => prev.map(p => ({ ...p, isStandard: p.id === id ? !p.isStandard : false }))); };
+            const deletePoint = (listType, id) => { let setter = listType === 'base' ? setBasePoints : (listType === 'history' ? setHistoryPoints : setTestPoints); setter(prev => prev.filter(p => p.id !== id)); };
+            const reset = () => { if(confirm('確定要重置所有資料嗎？')) { setBasePoints([{ id: 1, l: 80, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 2, l: 20, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 3, l: 50, a: 80, b: 60, name: '', visible: true, showPoint: true }, { id: 4, l: 50, a: -60, b: -40, name: '', visible: true, showPoint: true }]); setHistoryPoints([]); setTestPoints([]); } };
+            const standardPoint = testPoints.find(p => p.isStandard);
+            const processedTestPoints = testPoints.map(p => { if (standardPoint && p.id !== standardPoint.id) { return { ...p, deltaE: ColorUtils.calculateDeltaE(standardPoint, p) }; } return p; });
+
+            return (
+                <div className="flex flex-col md:flex-row h-full w-full bg-slate-50 font-sans text-gray-800">
+                    {showCamera && <CameraPicker onCapture={addFromCamera} onClose={() => setShowCamera(false)} />}
+                    <div className="w-full md:w-1/2 flex flex-col bg-white border-r border-gray-200 h-1/2 md:h-full z-10 shadow-xl overflow-hidden flex-shrink-0 transition-all">
+                        <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white flex justify-between items-center flex-shrink-0">
+                            <div className="flex items-center gap-2"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-blue-200 shadow-lg">Lab</div><h1 className="text-lg font-bold text-gray-800">色彩模擬</h1></div>
+                            <button onClick={reset} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-all" title="重置"><RotateCcw size={18} /></button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
+                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex flex-col max-h-[320px]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-slate-700"><div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm"></div> 基礎端點</h2><button onClick={() => addPoint('base')} className="flex items-center gap-1 text-xs bg-white border border-blue-200 hover:border-blue-400 text-blue-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">新增</span></button></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{basePoints.map(p => <InputRow key={p.id} point={p} onChange={(id, f, v) => updatePoint('base', id, f, v)} onDelete={(id) => deletePoint('base', id)} />)}</div></div>
+                            <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex flex-col max-h-[320px]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-orange-900"><div className="w-2.5 h-2.5 rounded-full bg-orange-500 shadow-sm"></div> 歷史端點</h2><button onClick={() => addPoint('history')} className="flex items-center gap-1 text-xs bg-white border border-orange-200 hover:border-orange-400 text-orange-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">新增</span></button></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{historyPoints.map(p => <InputRow key={p.id} point={p} inputColorClass="text-orange-700" onChange={(id, f, v) => updatePoint('history', id, f, v)} onDelete={(id) => deletePoint('history', id)} />)}</div></div>
+                            <div className="bg-purple-50 p-3 rounded-xl border border-purple-100 flex flex-col max-h-[40vh]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-purple-900"><div className="w-2.5 h-2.5 rounded-sm bg-purple-600 shadow-sm"></div> 測試座標</h2><div className="flex gap-2"><button onClick={() => setShowCamera(true)} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95" title="相機取色"><Camera size={14} /></button><button onClick={() => addPoint('test')} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">新增</span></button></div></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{processedTestPoints.map(p => <InputRow key={p.id} point={p} isTestPoint={true} inputColorClass="text-purple-700" isStandard={p.isStandard} deltaE={p.deltaE} onChange={(id, f, v) => updatePoint('test', id, f, v)} onDelete={(id) => deletePoint('test', id)} onToggleStandard={toggleStandard} />)}</div></div>
+                        </div>
+                    </div>
+                    <div className="flex-1 relative h-1/2 md:h-full flex flex-col bg-[#1e1e24] overflow-hidden">
+                        <div className="flex items-center justify-center p-2 bg-[#1e1e24] border-b border-white/10 shrink-0 z-30">
+                            <div className="flex bg-black/40 rounded-lg p-1 border border-white/10">
+                                <button onClick={() => setViewMode('3d')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === '3d' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>3D</button>
+                                <button onClick={() => setViewMode('2d')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === '2d' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>2D</button>
+                                <button onClick={() => setViewMode('split')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'split' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>分割</button>
+                            </div>
+                        </div>
+                        <div className="flex-1 relative flex flex-col">
+                            {(viewMode === '3d' || viewMode === 'split') && <div className={`relative ${viewMode === 'split' ? 'h-1/2 border-b border-white/10' : 'h-full'}`}><ViewContainer title="3D View" onCapture={() => capture3DRef.current && capture3DRef.current()} onToggleLabels={() => setShowLabels(!showLabels)} showLabels={showLabels}><Canvas camera={{ position: [200, 150, 200], fov: 40 }} dpr={[1, 2]}><color attach="background" args={['#1e1e24']} /><Scene3D basePoints={basePoints} historyPoints={historyPoints} testPoints={processedTestPoints} captureRef={capture3DRef} showLabels={showLabels} /></Canvas></ViewContainer></div>}
+                            {(viewMode === '2d' || viewMode === 'split') && <div className={`relative ${viewMode === 'split' ? 'h-1/2' : 'h-full'}`}><ViewContainer title="2D View (a-b)" onCapture={() => capture2DRef.current && capture2DRef.current()} onToggleLabels={() => setShowLabels(!showLabels)} showLabels={showLabels}><Canvas orthographic camera={{ position: [0, 0, 100], zoom: 1.5, near: 0.1, far: 1000 }} dpr={[1, 2]}><color attach="background" args={['#18181b']} /><Scene2D basePoints={basePoints} historyPoints={historyPoints} testPoints={processedTestPoints} captureRef={capture2DRef} showLabels={showLabels} /></Canvas></ViewContainer></div>}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        const root = createRoot(document.getElementById('root')); root.render(<App />);
+    </script>
+</body>
+</html>

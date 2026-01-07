@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -8,10 +8,13 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#1e1e24">
-    <title>Lab 色域模擬器 (同步確認版)</title>
+    <title>Lab Gamut Simulator</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- SheetJS for Excel Import -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     
     <!-- Import Maps -->
     <script type="importmap">
@@ -59,7 +62,7 @@
         import { OrbitControls, MapControls, Text, Html, Billboard } from '@react-three/drei';
         import * as THREE from 'three';
         import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry';
-        import { Plus, Trash2, RotateCcw, Info, Box, Camera, Maximize, Minimize, Tag, Eye, EyeOff, LayoutTemplate, Square, Circle, Target, X, Aperture, Upload, Image as ImageIcon } from 'lucide-react';
+        import { Plus, Trash2, RotateCcw, Info, Box, Camera, Maximize, Minimize, Tag, Eye, EyeOff, LayoutTemplate, Square, Circle, Target, X, Aperture, Upload, Image as ImageIcon, CornerRightDown, FileSpreadsheet } from 'lucide-react';
 
         /**
          * Math & Color Utility Functions
@@ -184,6 +187,90 @@
         };
 
         /**
+         * Gamut Calculation Utilities
+         */
+        const GamutUtils = {
+            // Calculate closest deltas to the gamut volume
+            calculateClosestDeltas: (targetPoint, mesh) => {
+                if (!mesh || !mesh.geometry) return null;
+                if (!targetPoint) return null;
+
+                // In our scene: X=a, Y=l, Z=b
+                const targetPos = new THREE.Vector3(targetPoint.a, targetPoint.l, targetPoint.b);
+
+                // 1. Raycast for L-priority (Vertical line test)
+                const raycaster = new THREE.Raycaster();
+                const rayOrigin = new THREE.Vector3(targetPoint.a, 1000, targetPoint.b);
+                const rayDir = new THREE.Vector3(0, -1, 0); // Downwards along L (Y axis)
+                raycaster.set(rayOrigin, rayDir);
+
+                mesh.updateMatrixWorld();
+                const intersects = raycaster.intersectObject(mesh, false);
+
+                if (intersects.length > 0) {
+                    const hitLs = intersects.map(hit => hit.point.y).sort((a, b) => a - b);
+                    const minL = hitLs[0];
+                    const maxL = hitLs[hitLs.length - 1];
+                    const currentL = targetPoint.l;
+
+                    if (currentL >= minL && currentL <= maxL) {
+                        return { dl: 0, da: 0, db: 0, isInside: true, type: 'inside' };
+                    } else {
+                        const diffMin = Math.abs(currentL - minL);
+                        const diffMax = Math.abs(currentL - maxL);
+                        let targetL;
+                        if (diffMin < diffMax) targetL = minL;
+                        else targetL = maxL;
+                        return { dl: (targetL - currentL).toFixed(1), da: 0, db: 0, isInside: false, type: 'l-only' };
+                    }
+                }
+
+                // 2. Nearest point on surface
+                const posAttr = mesh.geometry.attributes.position;
+                const triangle = new THREE.Triangle();
+                let minDistSq = Infinity;
+                let closestPoint = new THREE.Vector3();
+                const tempPoint = new THREE.Vector3();
+
+                if (mesh.geometry.index) {
+                    const indices = mesh.geometry.index.array;
+                    for (let i = 0; i < indices.length; i += 3) {
+                        triangle.set(
+                            new THREE.Vector3().fromBufferAttribute(posAttr, indices[i]),
+                            new THREE.Vector3().fromBufferAttribute(posAttr, indices[i+1]),
+                            new THREE.Vector3().fromBufferAttribute(posAttr, indices[i+2])
+                        );
+                        triangle.closestPointToPoint(targetPos, tempPoint);
+                        const dSq = tempPoint.distanceToSquared(targetPos);
+                        if (dSq < minDistSq) { minDistSq = dSq; closestPoint.copy(tempPoint); }
+                    }
+                } else {
+                    for (let i = 0; i < posAttr.count; i += 3) {
+                         triangle.set(
+                            new THREE.Vector3().fromBufferAttribute(posAttr, i),
+                            new THREE.Vector3().fromBufferAttribute(posAttr, i+1),
+                            new THREE.Vector3().fromBufferAttribute(posAttr, i+2)
+                        );
+                        triangle.closestPointToPoint(targetPos, tempPoint);
+                        const dSq = tempPoint.distanceToSquared(targetPos);
+                        if (dSq < minDistSq) { minDistSq = dSq; closestPoint.copy(tempPoint); }
+                    }
+                }
+
+                if (minDistSq !== Infinity) {
+                    return {
+                        dl: (closestPoint.y - targetPoint.l).toFixed(1),
+                        da: (closestPoint.x - targetPoint.a).toFixed(1),
+                        db: (closestPoint.z - targetPoint.b).toFixed(1),
+                        isInside: false,
+                        type: 'nearest'
+                    };
+                }
+                return null;
+            }
+        };
+
+        /**
          * Camera Color Picker
          */
         const CameraPicker = ({ onCapture, onClose }) => {
@@ -204,7 +291,7 @@
             useEffect(() => {
                 const startCamera = async () => {
                     if (isLocalFile) {
-                        setError("瀏覽器安全限制：本機檔案 (file://) 無法使用即時鏡頭。\n請使用下方按鈕進行拍照或上傳圖片。");
+                        setError("Browser Security Restriction: Local files (file://) cannot access camera directly.\nPlease use the 'Album/Photo' button below.");
                         return;
                     }
                     try {
@@ -221,7 +308,7 @@
                         }
                     } catch (err) {
                         console.warn("Camera access failed", err);
-                        setError("無法啟動相機。原因可能為：\n1. 瀏覽器安全限制 (需 HTTPS)\n2. 權限被拒絕\n請使用下方「上傳/拍照」按鈕。");
+                        setError("Cannot start camera. Reasons might be:\n1. Browser security (HTTPS required)\n2. Permission denied\nPlease use 'Album/Photo' button.");
                     }
                 };
                 if (!imageMode) startCamera();
@@ -297,16 +384,16 @@
                                 {pointerPos && (
                                     <div className="fixed w-8 h-8 border-2 border-white rounded-full pointer-events-none transform -translate-x-1/2 -translate-y-1/2 shadow-[0_0_10px_rgba(0,0,0,0.8)]" style={{ left: pointerPos.x, top: pointerPos.y, backgroundColor: `rgb(${color.r},${color.g},${color.b})` }}></div>
                                 )}
-                                <div className="absolute top-6 bg-black/70 text-white px-4 py-2 rounded-full text-sm pointer-events-none backdrop-blur-md shadow-lg border border-white/10">👆 點擊照片任意位置取色</div>
+                                <div className="absolute top-6 bg-black/70 text-white px-4 py-2 rounded-full text-sm pointer-events-none backdrop-blur-md shadow-lg border border-white/10">👆 Click anywhere to pick color</div>
                             </div>
                         ) : (
                             <>
                                 {error ? (
                                     <div className="text-white p-8 text-center max-w-sm flex flex-col items-center animate-pulse">
                                         <Camera size={64} className="mb-6 text-gray-500 opacity-80" />
-                                        <p className="font-bold mb-3 text-xl">相機模式</p>
+                                        <p className="font-bold mb-3 text-xl">Camera Mode</p>
                                         <p className="text-sm text-gray-400 mb-8 whitespace-pre-line leading-relaxed">{error}</p>
-                                        <button onClick={triggerFileInput} className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white px-8 py-4 rounded-full font-bold flex items-center gap-3 shadow-xl transition-all"><ImageIcon size={24} /> 選擇照片 / 啟動相機</button>
+                                        <button onClick={triggerFileInput} className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white px-8 py-4 rounded-full font-bold flex items-center gap-3 shadow-xl transition-all"><ImageIcon size={24} /> Album / Camera</button>
                                     </div>
                                 ) : (
                                     <>
@@ -314,7 +401,7 @@
                                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                                             <div className="w-16 h-16 border-2 border-white/70 rounded-full flex items-center justify-center shadow-lg"><div className="w-1 h-6 bg-white/90"></div><div className="h-1 w-6 bg-white/90 absolute"></div></div>
                                         </div>
-                                        <div className="absolute top-6 left-0 right-0 text-center pointer-events-none"><span className="bg-black/60 text-white/90 px-4 py-1.5 rounded-full text-xs backdrop-blur-sm border border-white/10">⚠ 數值受環境光影響，僅供參考</span></div>
+                                        <div className="absolute top-6 left-0 right-0 text-center pointer-events-none"><span className="bg-black/60 text-white/90 px-4 py-1.5 rounded-full text-xs backdrop-blur-sm border border-white/10">⚠ Values affected by lighting, for reference only</span></div>
                                     </>
                                 )}
                             </>
@@ -333,9 +420,9 @@
                             </div>
                         </div>
                         <div className="grid grid-cols-3 gap-4">
-                            <button onClick={onClose} className="bg-gray-800 active:bg-gray-700 text-white py-3.5 rounded-xl font-bold text-sm transition-colors">取消</button>
-                            <button onClick={triggerFileInput} className="bg-gray-800 active:bg-gray-700 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 cursor-pointer text-sm transition-colors"><ImageIcon size={18} /><span>相簿/拍照</span></button>
-                            <button onClick={handleCaptureClick} className="bg-blue-600 active:bg-blue-500 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 text-sm transition-colors shadow-lg shadow-blue-900/30"><CheckSquare size={18} /><span>確認採用</span></button>
+                            <button onClick={onClose} className="bg-gray-800 active:bg-gray-700 text-white py-3.5 rounded-xl font-bold text-sm transition-colors">Cancel</button>
+                            <button onClick={triggerFileInput} className="bg-gray-800 active:bg-gray-700 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 cursor-pointer text-sm transition-colors"><ImageIcon size={18} /><span>Album</span></button>
+                            <button onClick={handleCaptureClick} className="bg-blue-600 active:bg-blue-500 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 text-sm transition-colors shadow-lg shadow-blue-900/30"><CheckSquare size={18} /><span>Confirm</span></button>
                         </div>
                     </div>
                 </div>
@@ -373,7 +460,7 @@
             const [hovered, setHover] = useState(false);
             const hasName = name && name.trim().length > 0;
             const labelVisible = showLabels && (hasName || isTestPoint);
-            let defaultLabel = isTestPoint ? "測試點" : (typeLabel || "端點");
+            let defaultLabel = isTestPoint ? "Test" : (typeLabel || "Pt");
             let labelText = hasName ? name : defaultLabel;
             if (isStandard) labelText += " (Std)";
             else if (deltaE) labelText += ` (ΔE: ${deltaE})`;
@@ -482,7 +569,6 @@
         };
 
         const Scene3D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels }) => {
-            // CHECKING POINT SOURCE: Merging base and history for gamut calc
             const gamutPoints = useMemo(() => [...basePoints.filter(p=>p.visible!==false), ...historyPoints.filter(p=>p.visible!==false)], [basePoints, historyPoints]);
             const renderBase = useMemo(() => basePoints.filter(p => p.showPoint !== false), [basePoints]);
             const renderHistory = useMemo(() => historyPoints.filter(p => p.showPoint !== false), [historyPoints]);
@@ -495,8 +581,8 @@
                     <pointLight position={[-200, -200, -200]} intensity={0.5} />
                     <OrbitControls makeDefault target={[0, 50, 0]} dampingFactor={0.1} />
                     <AxesSystem3D />
-                    {renderBase.map((p) => <LabPoint key={p.id} {...p} mode="3d" showLabels={showLabels} typeLabel="基礎" />)}
-                    {renderHistory.map((p) => <LabPoint key={p.id} {...p} mode="3d" showLabels={showLabels} typeLabel="歷史" />)}
+                    {renderBase.map((p) => <LabPoint key={p.id} {...p} mode="3d" showLabels={showLabels} typeLabel="Base" />)}
+                    {renderHistory.map((p) => <LabPoint key={p.id} {...p} mode="3d" showLabels={showLabels} typeLabel="Hist" />)}
                     {renderTest.map((p) => <LabPoint key={p.id} {...p} mode="3d" isTestPoint={true} showLabels={showLabels} />)}
                     <GamutVolume points={gamutPoints} mode="3d" />
                 </>
@@ -504,7 +590,6 @@
         };
 
         const Scene2D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels }) => {
-            // CHECKING POINT SOURCE: Same logic as Scene3D
             const gamutPoints = useMemo(() => [...basePoints.filter(p=>p.visible!==false), ...historyPoints.filter(p=>p.visible!==false)], [basePoints, historyPoints]);
             const renderBase = useMemo(() => basePoints.filter(p => p.showPoint !== false), [basePoints]);
             const renderHistory = useMemo(() => historyPoints.filter(p => p.showPoint !== false), [historyPoints]);
@@ -516,8 +601,8 @@
                     <directionalLight position={[0, 0, 100]} intensity={1} />
                     <MapControls makeDefault screenSpacePanning={true} minZoom={0.5} maxZoom={5} dampingFactor={0.1} />
                     <AxesSystem2D />
-                    {renderBase.map((p) => <LabPoint key={p.id} {...p} mode="2d" showLabels={showLabels} typeLabel="基礎" />)}
-                    {renderHistory.map((p) => <LabPoint key={p.id} {...p} mode="2d" showLabels={showLabels} typeLabel="歷史" />)}
+                    {renderBase.map((p) => <LabPoint key={p.id} {...p} mode="2d" showLabels={showLabels} typeLabel="Base" />)}
+                    {renderHistory.map((p) => <LabPoint key={p.id} {...p} mode="2d" showLabels={showLabels} typeLabel="Hist" />)}
                     {renderTest.map((p) => <LabPoint key={p.id} {...p} mode="2d" isTestPoint={true} showLabels={showLabels} />)}
                     <GamutVolume points={gamutPoints} mode="2d" />
                 </>
@@ -529,7 +614,6 @@
             const handleChange = (field, value) => {
                 if (field === 'name' || field === 'visible' || field === 'showPoint') { onChange(point.id, field, value); return; }
                 let val = parseFloat(value); if(isNaN(val)) val = 0;
-                // Expanded Limits: L: 0-200, a/b: -200 to 200
                 if (field === 'l') val = ColorUtils.clamp(val, 0, 200); if (field === 'a' || field === 'b') val = ColorUtils.clamp(val, -200, 200);
                 onChange(point.id, field, val);
             };
@@ -539,8 +623,8 @@
                         <div className="mr-2 flex items-center gap-1 border-r border-gray-100 pr-2">
                             {isTestPoint ? (
                                 <>
-                                    <button onClick={() => onToggleStandard(point.id)} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${isStandard ? 'text-red-500 hover:text-red-600 bg-red-50' : 'text-gray-300 hover:text-red-400'}`} title={isStandard ? "取消標準點" : "設為標準點"}><Target size={16} fill={isStandard ? "currentColor" : "none"} /></button>
-                                    <button onClick={() => handleChange('showPoint', !(point.showPoint !== false))} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${point.showPoint !== false ? 'text-gray-600 hover:text-gray-800' : 'text-gray-300 hover:text-gray-400'}`} title="顯示"><Eye size={16} /></button>
+                                    <button onClick={() => onToggleStandard(point.id)} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${isStandard ? 'text-red-500 hover:text-red-600 bg-red-50' : 'text-gray-300 hover:text-red-400'}`} title={isStandard ? "Unset Standard" : "Set as Standard"}><Target size={16} fill={isStandard ? "currentColor" : "none"} /></button>
+                                    <button onClick={() => handleChange('showPoint', !(point.showPoint !== false))} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${point.showPoint !== false ? 'text-gray-600 hover:text-gray-800' : 'text-gray-300 hover:text-gray-400'}`} title="Show/Hide"><Eye size={16} /></button>
                                 </>
                             ) : (
                                 <>
@@ -552,8 +636,8 @@
                                 </>
                             )}
                         </div>
-                        <span className="text-[10px] text-gray-400 font-bold mr-1">名稱:</span>
-                        <input type="text" placeholder="名稱" value={point.name || ''} onChange={(e) => handleChange('name', e.target.value)} className={`w-16 text-xs font-medium focus:outline-none placeholder-gray-300 bg-transparent ${inputColorClass}`} />
+                        <span className="text-[10px] text-gray-400 font-bold mr-1">Name:</span>
+                        <input type="text" placeholder="Name" value={point.name || ''} onChange={(e) => handleChange('name', e.target.value)} className={`w-16 text-xs font-medium focus:outline-none placeholder-gray-300 bg-transparent ${inputColorClass}`} />
                         {isTestPoint && !isStandard && deltaE && <div className="ml-auto bg-gray-100 px-1.5 py-0.5 rounded text-[10px] font-mono text-gray-600 flex items-center"><span className="font-bold text-gray-400 mr-1">ΔE</span><span className={parseFloat(deltaE) > 5 ? "text-red-500 font-bold" : "text-gray-800"}>{deltaE}</span></div>}
                         {isStandard && <div className="ml-auto bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded text-[10px] font-bold">STD</div>}
                     </div>
@@ -569,6 +653,25 @@
                         </div>
                         <button onClick={() => onDelete(point.id)} className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-full transition-all"><Trash2 size={14} /></button>
                     </div>
+                    {/* Gamut Distance Info for Test Points */}
+                    {isTestPoint && point.gamutDeltas && (
+                        <div className={`mt-2 rounded px-2 py-1.5 text-[10px] font-mono border flex items-center gap-2 ${point.gamutDeltas.isInside ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-600 border-slate-100'}`}>
+                            {point.gamutDeltas.isInside ? (
+                                <span className="font-bold flex items-center gap-1"><div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div> In Gamut</span>
+                            ) : (
+                                <div className="flex flex-col w-full">
+                                    <div className="flex items-center justify-between mb-0.5">
+                                        <span className="font-bold text-slate-400 flex items-center gap-1"><CornerRightDown size={10}/> Correction (L-Priority)</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-slate-700 font-bold">
+                                        <span>DL: <span className={Math.abs(point.gamutDeltas.dl) > 0 ? "text-blue-600" : ""}>{point.gamutDeltas.dl > 0 ? '+' : ''}{point.gamutDeltas.dl}</span></span>
+                                        <span>DA: <span className={Math.abs(point.gamutDeltas.da) > 0 ? "text-blue-600" : ""}>{point.gamutDeltas.da > 0 ? '+' : ''}{point.gamutDeltas.da}</span></span>
+                                        <span>DB: <span className={Math.abs(point.gamutDeltas.db) > 0 ? "text-blue-600" : ""}>{point.gamutDeltas.db > 0 ? '+' : ''}{point.gamutDeltas.db}</span></span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             );
         };
@@ -585,7 +688,25 @@
             const [showLabels, setShowLabels] = useState(false);
             const [viewMode, setViewMode] = useState('split');
             const [showCamera, setShowCamera] = useState(false);
+            const fileInputRef = useRef(null);
             
+            // Gamut Calculation Mesh (Memoized)
+            const gamutMesh = useMemo(() => {
+                const gamutPoints = [...basePoints.filter(p=>p.visible!==false), ...historyPoints.filter(p=>p.visible!==false)];
+                if (gamutPoints.length < 4) return null;
+
+                const vectors = gamutPoints.map(p => new THREE.Vector3(p.a, p.l, p.b)); // X=a, Y=l, Z=b
+                
+                try {
+                    const geo = new ConvexGeometry(vectors);
+                    const mesh = new THREE.Mesh(geo);
+                    return mesh;
+                } catch (e) {
+                    console.warn("Failed to generate hull for calc", e);
+                    return null;
+                }
+            }, [basePoints, historyPoints]);
+
             useEffect(() => { window.localStorage.setItem('lab_basePoints', JSON.stringify(basePoints)); window.localStorage.setItem('lab_historyPoints', JSON.stringify(historyPoints)); window.localStorage.setItem('lab_testPoints', JSON.stringify(testPoints)); }, [basePoints, historyPoints, testPoints]);
             
             const capture3DRef = useRef(null); const capture2DRef = useRef(null);
@@ -594,22 +715,122 @@
             const updatePoint = (listType, id, field, value) => { let setter = listType === 'base' ? setBasePoints : (listType === 'history' ? setHistoryPoints : setTestPoints); setter(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p)); };
             const toggleStandard = (id) => { setTestPoints(prev => prev.map(p => ({ ...p, isStandard: p.id === id ? !p.isStandard : false }))); };
             const deletePoint = (listType, id) => { let setter = listType === 'base' ? setBasePoints : (listType === 'history' ? setHistoryPoints : setTestPoints); setter(prev => prev.filter(p => p.id !== id)); };
-            const reset = () => { if(confirm('確定要重置所有資料嗎？')) { setBasePoints([{ id: 1, l: 80, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 2, l: 20, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 3, l: 50, a: 80, b: 60, name: '', visible: true, showPoint: true }, { id: 4, l: 50, a: -60, b: -40, name: '', visible: true, showPoint: true }]); setHistoryPoints([]); setTestPoints([]); } };
+            const reset = () => { if(confirm('Are you sure you want to reset all data?')) { setBasePoints([{ id: 1, l: 80, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 2, l: 20, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 3, l: 50, a: 80, b: 60, name: '', visible: true, showPoint: true }, { id: 4, l: 50, a: -60, b: -40, name: '', visible: true, showPoint: true }]); setHistoryPoints([]); setTestPoints([]); } };
             const standardPoint = testPoints.find(p => p.isStandard);
-            const processedTestPoints = testPoints.map(p => { if (standardPoint && p.id !== standardPoint.id) { return { ...p, deltaE: ColorUtils.calculateDeltaE(standardPoint, p) }; } return p; });
+            
+            // Excel Import Handler
+            const handleExcelImport = (e) => {
+                const file = e.target.files[0];
+                if(!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    try {
+                        const data = new Uint8Array(evt.target.result);
+                        const workbook = XLSX.read(data, { type: 'array' });
+                        
+                        let newBase = [];
+                        let newHistory = [];
+                        let newTest = [];
+
+                        workbook.SheetNames.forEach(sheetName => {
+                            const lowerName = sheetName.toLowerCase();
+                            const sheet = workbook.Sheets[sheetName];
+                            const json = XLSX.utils.sheet_to_json(sheet);
+                            
+                            // Helper to parse row
+                            const parseRow = (row) => {
+                                // Try to find keys case-insensitively
+                                const keys = Object.keys(row);
+                                const getVal = (k) => {
+                                    const key = keys.find(key => key.toLowerCase() === k.toLowerCase());
+                                    return key ? parseFloat(row[key]) : null;
+                                };
+                                const getName = () => {
+                                    const key = keys.find(key => key.toLowerCase() === 'name');
+                                    return key ? row[key] : '';
+                                }
+
+                                // Look for 'L', 'a', 'b' specifically
+                                const l = getVal('l');
+                                const a = getVal('a');
+                                const b = getVal('b');
+                                
+                                if (l !== null && a !== null && b !== null && !isNaN(l) && !isNaN(a) && !isNaN(b)) {
+                                    return {
+                                        id: Date.now() + Math.random(),
+                                        l: ColorUtils.clamp(l, 0, 200),
+                                        a: ColorUtils.clamp(a, -200, 200),
+                                        b: ColorUtils.clamp(b, -200, 200),
+                                        name: getName(),
+                                        visible: true,
+                                        showPoint: true,
+                                        isStandard: false
+                                    };
+                                }
+                                return null;
+                            };
+
+                            const parsedPoints = json.map(parseRow).filter(p => p !== null);
+
+                            if (lowerName.includes('base')) {
+                                newBase = [...newBase, ...parsedPoints];
+                            } else if (lowerName.includes('history')) {
+                                newHistory = [...newHistory, ...parsedPoints];
+                            } else if (lowerName.includes('test')) {
+                                newTest = [...newTest, ...parsedPoints];
+                            }
+                        });
+
+                        if (newBase.length > 0) setBasePoints(prev => [...prev, ...newBase]);
+                        if (newHistory.length > 0) setHistoryPoints(prev => [...prev, ...newHistory]);
+                        if (newTest.length > 0) setTestPoints(prev => [...prev, ...newTest]);
+
+                        alert(`Imported: ${newBase.length} Base, ${newHistory.length} History, ${newTest.length} Test points.`);
+                    } catch (err) {
+                        console.error(err);
+                        // Updated error message to reflect expected format
+                        alert("Failed to parse Excel file. Please check format: Name, L, a, b");
+                    }
+                    // Reset input
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                };
+                reader.readAsArrayBuffer(file);
+            };
+
+            const triggerExcelInput = () => fileInputRef.current && fileInputRef.current.click();
+
+            // Process test points to add DeltaE and Gamut Delta info
+            const processedTestPoints = testPoints.map(p => { 
+                let processed = { ...p };
+                // Delta E
+                if (standardPoint && p.id !== standardPoint.id) { 
+                    processed.deltaE = ColorUtils.calculateDeltaE(standardPoint, p); 
+                }
+                // Gamut Delta
+                if (gamutMesh) {
+                    processed.gamutDeltas = GamutUtils.calculateClosestDeltas(p, gamutMesh);
+                }
+                return processed; 
+            });
 
             return (
                 <div className="flex flex-col md:flex-row h-full w-full bg-slate-50 font-sans text-gray-800">
                     {showCamera && <CameraPicker onCapture={addFromCamera} onClose={() => setShowCamera(false)} />}
+                    <input type="file" ref={fileInputRef} onChange={handleExcelImport} accept=".xlsx, .xls" className="hidden" />
+                    
                     <div className="w-full md:w-1/2 flex flex-col bg-white border-r border-gray-200 h-1/2 md:h-full z-10 shadow-xl overflow-hidden flex-shrink-0 transition-all">
                         <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white flex justify-between items-center flex-shrink-0">
-                            <div className="flex items-center gap-2"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-blue-200 shadow-lg">Lab</div><h1 className="text-lg font-bold text-gray-800">色彩模擬</h1></div>
-                            <button onClick={reset} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-all" title="重置"><RotateCcw size={18} /></button>
+                            <div className="flex items-center gap-2"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-blue-200 shadow-lg">Lab</div><h1 className="text-lg font-bold text-gray-800">Gamut Simulator</h1></div>
+                            <div className="flex gap-2">
+                                <button onClick={triggerExcelInput} className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-all" title="Import Excel"><FileSpreadsheet size={18} /></button>
+                                <button onClick={reset} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-all" title="Reset"><RotateCcw size={18} /></button>
+                            </div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex flex-col max-h-[320px]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-slate-700"><div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm"></div> 基礎端點</h2><button onClick={() => addPoint('base')} className="flex items-center gap-1 text-xs bg-white border border-blue-200 hover:border-blue-400 text-blue-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">新增</span></button></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{basePoints.map(p => <InputRow key={p.id} point={p} onChange={(id, f, v) => updatePoint('base', id, f, v)} onDelete={(id) => deletePoint('base', id)} />)}</div></div>
-                            <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex flex-col max-h-[320px]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-orange-900"><div className="w-2.5 h-2.5 rounded-full bg-orange-500 shadow-sm"></div> 歷史端點</h2><button onClick={() => addPoint('history')} className="flex items-center gap-1 text-xs bg-white border border-orange-200 hover:border-orange-400 text-orange-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">新增</span></button></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{historyPoints.map(p => <InputRow key={p.id} point={p} inputColorClass="text-orange-700" onChange={(id, f, v) => updatePoint('history', id, f, v)} onDelete={(id) => deletePoint('history', id)} />)}</div></div>
-                            <div className="bg-purple-50 p-3 rounded-xl border border-purple-100 flex flex-col max-h-[40vh]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-purple-900"><div className="w-2.5 h-2.5 rounded-sm bg-purple-600 shadow-sm"></div> 測試座標</h2><div className="flex gap-2"><button onClick={() => setShowCamera(true)} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95" title="相機取色"><Camera size={14} /></button><button onClick={() => addPoint('test')} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">新增</span></button></div></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{processedTestPoints.map(p => <InputRow key={p.id} point={p} isTestPoint={true} inputColorClass="text-purple-700" isStandard={p.isStandard} deltaE={p.deltaE} onChange={(id, f, v) => updatePoint('test', id, f, v)} onDelete={(id) => deletePoint('test', id)} onToggleStandard={toggleStandard} />)}</div></div>
+                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex flex-col max-h-[320px]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-slate-700"><div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm"></div> Base Points</h2><button onClick={() => addPoint('base')} className="flex items-center gap-1 text-xs bg-white border border-blue-200 hover:border-blue-400 text-blue-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{basePoints.map(p => <InputRow key={p.id} point={p} onChange={(id, f, v) => updatePoint('base', id, f, v)} onDelete={(id) => deletePoint('base', id)} />)}</div></div>
+                            <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex flex-col max-h-[320px]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-orange-900"><div className="w-2.5 h-2.5 rounded-full bg-orange-500 shadow-sm"></div> History Points</h2><button onClick={() => addPoint('history')} className="flex items-center gap-1 text-xs bg-white border border-orange-200 hover:border-orange-400 text-orange-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{historyPoints.map(p => <InputRow key={p.id} point={p} inputColorClass="text-orange-700" onChange={(id, f, v) => updatePoint('history', id, f, v)} onDelete={(id) => deletePoint('history', id)} />)}</div></div>
+                            <div className="bg-purple-50 p-3 rounded-xl border border-purple-100 flex flex-col max-h-[40vh]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-purple-900"><div className="w-2.5 h-2.5 rounded-sm bg-purple-600 shadow-sm"></div> Test Points</h2><div className="flex gap-2"><button onClick={() => setShowCamera(true)} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95" title="Camera Picker"><Camera size={14} /></button><button onClick={() => addPoint('test')} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button></div></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{processedTestPoints.map(p => <InputRow key={p.id} point={p} isTestPoint={true} inputColorClass="text-purple-700" isStandard={p.isStandard} deltaE={p.deltaE} onChange={(id, f, v) => updatePoint('test', id, f, v)} onDelete={(id) => deletePoint('test', id)} onToggleStandard={toggleStandard} />)}</div></div>
                         </div>
                     </div>
                     <div className="flex-1 relative h-1/2 md:h-full flex flex-col bg-[#1e1e24] overflow-hidden">
@@ -617,7 +838,7 @@
                             <div className="flex bg-black/40 rounded-lg p-1 border border-white/10">
                                 <button onClick={() => setViewMode('3d')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === '3d' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>3D</button>
                                 <button onClick={() => setViewMode('2d')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === '2d' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>2D</button>
-                                <button onClick={() => setViewMode('split')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'split' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>分割</button>
+                                <button onClick={() => setViewMode('split')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'split' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>Split</button>
                             </div>
                         </div>
                         <div className="flex-1 relative flex flex-col">

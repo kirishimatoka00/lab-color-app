@@ -506,13 +506,24 @@
                 let geo;
                 try {
                     geo = new ConvexGeometry(vectors);
-                    // Critical Fix: Use DoubleSide to ensure Raycaster hits both entry (Top) and exit (Bottom) faces
-                    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-                    return mesh;
-                } catch (e) {
-                    console.warn("Failed to generate hull for calc", e);
-                    return null;
-                }
+                    const count = geo.attributes.position.count;
+                    const colors = [];
+                    const pos = geo.attributes.position;
+                    for(let i = 0; i < count; i++) {
+                        const x = pos.getX(i); const y = pos.getY(i); const z = pos.getZ(i);
+                        let minD = Infinity; let closest = points[0];
+                        for(let p of points) {
+                            let d;
+                            if (mode === '2d') d = (p.a - x)**2 + (p.b - y)**2;
+                            else d = (p.a - x)**2 + (p.l - y)**2 + (p.b - z)**2;
+                            if(d < minD) { minD = d; closest = p; }
+                        }
+                        const rgb = ColorUtils.labToRgbNormalized(closest.l, closest.a, closest.b);
+                        colors.push(rgb[0], rgb[1], rgb[2]);
+                    }
+                    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                } catch (e) { return { geometry: null }; }
+                return { geometry: geo };
             }, [points, mode]);
             if (!geometry) return null;
             return <group><mesh geometry={geometry}><meshBasicMaterial vertexColors={true} transparent={true} opacity={0.6} side={THREE.DoubleSide} depthWrite={false} /></mesh></group>;

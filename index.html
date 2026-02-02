@@ -33,11 +33,14 @@
     </script>
 
     <!-- Babel (Fixed Version) -->
-    <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
 
     <style>
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background-color: #1e1e24; -webkit-tap-highlight-color: transparent; }
         
+        /* Fix for React Root Height */
+        #root { height: 100%; width: 100%; }
+
         /* Custom Scrollbar */
         ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -55,14 +58,14 @@
 <body>
     <div id="root"></div>
 
-    <script type="text/babel" data-type="module" data-presets="react">
+    <script type="text/babel" data-type="module">
         import React, { useState, useMemo, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { Canvas, useThree } from '@react-three/fiber';
         import { OrbitControls, MapControls, Text, Html, Billboard } from '@react-three/drei';
         import * as THREE from 'three';
         import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry';
-        import { Plus, Trash2, RotateCcw, Info, Box, Camera, Maximize, Minimize, Tag, Eye, EyeOff, LayoutTemplate, Square, Circle, Target, X, Aperture, Upload, Image as ImageIcon, CornerRightDown, FileSpreadsheet } from 'lucide-react';
+        import { Plus, Trash2, RotateCcw, Info, Box, Camera, Maximize, Minimize, Tag, Eye, EyeOff, LayoutTemplate, Square, Circle, Target, X, Aperture, Upload, Image as ImageIcon, CornerRightDown, FileSpreadsheet, Download, CheckSquare as CheckSquareIcon } from 'lucide-react';
 
         /**
          * Math & Color Utility Functions
@@ -629,10 +632,19 @@
                                 </>
                             ) : (
                                 <>
-                                    <label className="cursor-pointer text-gray-400 hover:text-blue-600 transition-colors w-6 h-6 flex items-center justify-center">
-                                        <input type="checkbox" checked={point.visible !== false} onChange={(e) => handleChange('visible', e.target.checked)} className="sr-only" />
-                                        {point.visible !== false ? <div className="w-4 h-4 bg-blue-100 text-blue-600 rounded flex items-center justify-center"><CheckSquare size={14} /></div> : <div className="w-4 h-4 border border-gray-300 rounded hover:border-blue-400"></div>}
-                                    </label>
+                                    <button 
+                                        onClick={() => handleChange('visible', !(point.visible !== false))}
+                                        className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-blue-600 transition-colors"
+                                        title="Toggle Gamut Visibility"
+                                    >
+                                        {point.visible !== false ? (
+                                            <div className="w-4 h-4 bg-blue-100 text-blue-600 rounded flex items-center justify-center">
+                                                <CheckSquareIcon size={14} />
+                                            </div>
+                                        ) : (
+                                            <div className="w-4 h-4 border border-gray-300 rounded hover:border-blue-400"></div>
+                                        )}
+                                    </button>
                                     <button onClick={() => handleChange('showPoint', !(point.showPoint !== false))} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${point.showPoint !== false ? 'text-gray-600 hover:text-gray-800' : 'text-gray-300 hover:text-gray-400'}`}><Eye size={16} /></button>
                                 </>
                             )}
@@ -720,6 +732,18 @@
             const reset = () => { if(confirm('Are you sure you want to reset all data?')) { setBasePoints([{ id: 1, l: 80, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 2, l: 20, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 3, l: 50, a: 80, b: 60, name: '', visible: true, showPoint: true }, { id: 4, l: 50, a: -60, b: -40, name: '', visible: true, showPoint: true }]); setHistoryPoints([]); setTestPoints([]); } };
             const standardPoint = testPoints.find(p => p.isStandard);
             
+            // Toggle All Helpers
+            const toggleAll = (type, field) => {
+                let setter = type === 'base' ? setBasePoints : (type === 'history' ? setHistoryPoints : setTestPoints);
+                setter(prev => {
+                    const allTrue = prev.every(p => p[field] !== false); // Note: explicit check against false because undefined/true is visible
+                    const target = !allTrue;
+                    return prev.map(p => ({ ...p, [field]: target }));
+                });
+            };
+
+            const isAllChecked = (points, field) => points.length > 0 && points.every(p => p[field] !== false);
+
             // Excel Import Handler
             const handleExcelImport = (e) => {
                 const file = e.target.files[0];
@@ -802,6 +826,36 @@
 
             const triggerExcelInput = () => fileInputRef.current && fileInputRef.current.click();
 
+            // Excel Export Handler
+            const handleExcelExport = () => {
+                const wb = XLSX.utils.book_new();
+
+                const formatData = (points) => points.map(p => ({
+                    Name: p.name,
+                    L: p.l,
+                    a: p.a,
+                    b: p.b,
+                    Visible: p.visible ? 'Yes' : 'No',
+                    ShowPoint: p.showPoint ? 'Yes' : 'No',
+                    ...(p.isStandard !== undefined ? { IsStandard: p.isStandard ? 'Yes' : 'No' } : {})
+                }));
+
+                if (basePoints.length > 0) {
+                    const wsBase = XLSX.utils.json_to_sheet(formatData(basePoints));
+                    XLSX.utils.book_append_sheet(wb, wsBase, "Base Points");
+                }
+                if (historyPoints.length > 0) {
+                    const wsHist = XLSX.utils.json_to_sheet(formatData(historyPoints));
+                    XLSX.utils.book_append_sheet(wb, wsHist, "History Points");
+                }
+                if (testPoints.length > 0) {
+                    const wsTest = XLSX.utils.json_to_sheet(formatData(testPoints));
+                    XLSX.utils.book_append_sheet(wb, wsTest, "Test Points");
+                }
+
+                XLSX.writeFile(wb, "lab_gamut_data.xlsx");
+            };
+
             // Process test points to add DeltaE and Gamut Delta info
             const processedTestPoints = testPoints.map(p => { 
                 let processed = { ...p };
@@ -817,25 +871,66 @@
             });
 
             return (
-                <div className="flex flex-col md:flex-row h-full w-full bg-slate-50 font-sans text-gray-800">
+                <div className="fixed inset-0 flex flex-col md:flex-row w-full h-full bg-slate-50 font-sans text-gray-800 overflow-hidden">
                     {showCamera && <CameraPicker onCapture={addFromCamera} onClose={() => setShowCamera(false)} />}
                     <input type="file" ref={fileInputRef} onChange={handleExcelImport} accept=".xlsx, .xls" className="hidden" />
                     
-                    <div className="w-full md:w-1/2 flex flex-col bg-white border-r border-gray-200 h-1/2 md:h-full z-10 shadow-xl overflow-hidden flex-shrink-0 transition-all">
+                    <div className="w-full md:w-1/2 flex flex-col bg-white border-r border-gray-200 h-1/2 md:h-full z-10 shadow-xl overflow-hidden flex-shrink-0">
                         <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white flex justify-between items-center flex-shrink-0">
                             <div className="flex items-center gap-2"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-blue-200 shadow-lg">Lab</div><h1 className="text-lg font-bold text-gray-800">Gamut Simulator</h1></div>
                             <div className="flex gap-2">
                                 <button onClick={triggerExcelInput} className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-all" title="Import Excel"><FileSpreadsheet size={18} /></button>
+                                <button onClick={handleExcelExport} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-all" title="Export Excel"><Download size={18} /></button>
                                 <button onClick={reset} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-all" title="Reset"><RotateCcw size={18} /></button>
                             </div>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex flex-col max-h-[320px]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-slate-700"><div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm"></div> Base Points</h2><button onClick={() => addPoint('base')} className="flex items-center gap-1 text-xs bg-white border border-blue-200 hover:border-blue-400 text-blue-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{basePoints.map(p => <InputRow key={p.id} point={p} onChange={(id, f, v) => updatePoint('base', id, f, v)} onDelete={(id) => deletePoint('base', id)} />)}</div></div>
-                            <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex flex-col max-h-[320px]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-orange-900"><div className="w-2.5 h-2.5 rounded-full bg-orange-500 shadow-sm"></div> History Points</h2><button onClick={() => addPoint('history')} className="flex items-center gap-1 text-xs bg-white border border-orange-200 hover:border-orange-400 text-orange-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{historyPoints.map(p => <InputRow key={p.id} point={p} inputColorClass="text-orange-700" onChange={(id, f, v) => updatePoint('history', id, f, v)} onDelete={(id) => deletePoint('history', id)} />)}</div></div>
-                            <div className="bg-purple-50 p-3 rounded-xl border border-purple-100 flex flex-col max-h-[40vh]"><div className="flex justify-between items-center mb-3 flex-shrink-0"><h2 className="text-sm font-bold flex items-center gap-2 text-purple-900"><div className="w-2.5 h-2.5 rounded-sm bg-purple-600 shadow-sm"></div> Test Points</h2><div className="flex gap-2"><button onClick={() => setShowCamera(true)} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95" title="Camera Picker"><Camera size={14} /></button><button onClick={() => addPoint('test')} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button></div></div><div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{processedTestPoints.map(p => <InputRow key={p.id} point={p} isTestPoint={true} inputColorClass="text-purple-700" isStandard={p.isStandard} deltaE={p.deltaE} onChange={(id, f, v) => updatePoint('test', id, f, v)} onDelete={(id) => deletePoint('test', id)} onToggleStandard={toggleStandard} />)}</div></div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar min-w-0">
+                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex flex-col max-h-[320px]">
+                                <div className="flex justify-between items-center mb-3 flex-shrink-0">
+                                    <div className="flex items-center gap-2">
+                                        <h2 className="text-sm font-bold flex items-center gap-2 text-slate-700"><div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm"></div> Base Points</h2>
+                                        <div className="flex items-center gap-1 ml-2 border-l border-slate-200 pl-2">
+                                            <button onClick={() => toggleAll('base', 'visible')} className={`w-5 h-5 flex items-center justify-center rounded hover:bg-blue-100 transition-colors ${isAllChecked(basePoints, 'visible') ? 'text-blue-600' : 'text-gray-400'}`} title="Select/Deselect All Gamut">{isAllChecked(basePoints, 'visible') ? <CheckSquareIcon size={14} /> : <Square size={14} />}</button>
+                                            <button onClick={() => toggleAll('base', 'showPoint')} className={`w-5 h-5 flex items-center justify-center rounded hover:bg-blue-100 transition-colors ${isAllChecked(basePoints, 'showPoint') ? 'text-gray-600' : 'text-gray-400'}`} title="Show/Hide All Points"><Eye size={14} /></button>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => addPoint('base')} className="flex items-center gap-1 text-xs bg-white border border-blue-200 hover:border-blue-400 text-blue-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button>
+                                </div>
+                                <div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{basePoints.map(p => <InputRow key={p.id} point={p} onChange={(id, f, v) => updatePoint('base', id, f, v)} onDelete={(id) => deletePoint('base', id)} />)}</div>
+                            </div>
+                            
+                            <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex flex-col max-h-[320px]">
+                                <div className="flex justify-between items-center mb-3 flex-shrink-0">
+                                    <div className="flex items-center gap-2">
+                                        <h2 className="text-sm font-bold flex items-center gap-2 text-orange-900"><div className="w-2.5 h-2.5 rounded-full bg-orange-500 shadow-sm"></div> History Points</h2>
+                                        <div className="flex items-center gap-1 ml-2 border-l border-orange-200 pl-2">
+                                            <button onClick={() => toggleAll('history', 'visible')} className={`w-5 h-5 flex items-center justify-center rounded hover:bg-orange-200 transition-colors ${isAllChecked(historyPoints, 'visible') ? 'text-blue-600' : 'text-gray-400'}`} title="Select/Deselect All Gamut">{isAllChecked(historyPoints, 'visible') ? <CheckSquareIcon size={14} /> : <Square size={14} />}</button>
+                                            <button onClick={() => toggleAll('history', 'showPoint')} className={`w-5 h-5 flex items-center justify-center rounded hover:bg-orange-200 transition-colors ${isAllChecked(historyPoints, 'showPoint') ? 'text-gray-600' : 'text-gray-400'}`} title="Show/Hide All Points"><Eye size={14} /></button>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => addPoint('history')} className="flex items-center gap-1 text-xs bg-white border border-orange-200 hover:border-orange-400 text-orange-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button>
+                                </div>
+                                <div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{historyPoints.map(p => <InputRow key={p.id} point={p} inputColorClass="text-orange-700" onChange={(id, f, v) => updatePoint('history', id, f, v)} onDelete={(id) => deletePoint('history', id)} />)}</div>
+                            </div>
+                            
+                            <div className="bg-purple-50 p-3 rounded-xl border border-purple-100 flex flex-col max-h-[40vh]">
+                                <div className="flex justify-between items-center mb-3 flex-shrink-0">
+                                    <div className="flex items-center gap-2">
+                                        <h2 className="text-sm font-bold flex items-center gap-2 text-purple-900"><div className="w-2.5 h-2.5 rounded-sm bg-purple-600 shadow-sm"></div> Test Points</h2>
+                                        <div className="flex items-center gap-1 ml-2 border-l border-purple-200 pl-2">
+                                            <button onClick={() => toggleAll('test', 'showPoint')} className={`w-5 h-5 flex items-center justify-center rounded hover:bg-purple-200 transition-colors ${isAllChecked(testPoints, 'showPoint') ? 'text-gray-600' : 'text-gray-400'}`} title="Show/Hide All Points"><Eye size={14} /></button>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setShowCamera(true)} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95" title="Camera Picker"><Camera size={14} /></button>
+                                        <button onClick={() => addPoint('test')} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3 py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button>
+                                    </div>
+                                </div>
+                                <div className="space-y-1 overflow-y-auto pr-2 custom-scrollbar flex-1">{processedTestPoints.map(p => <InputRow key={p.id} point={p} isTestPoint={true} inputColorClass="text-purple-700" isStandard={p.isStandard} deltaE={p.deltaE} onChange={(id, f, v) => updatePoint('test', id, f, v)} onDelete={(id) => deletePoint('test', id)} onToggleStandard={toggleStandard} />)}</div>
+                            </div>
                         </div>
                     </div>
-                    <div className="flex-1 relative h-1/2 md:h-full flex flex-col bg-[#1e1e24] overflow-hidden">
+                    <div className="flex-1 relative h-1/2 md:h-full flex flex-col bg-[#1e1e24] overflow-hidden min-w-0">
                         <div className="flex items-center justify-center p-2 bg-[#1e1e24] border-b border-white/10 shrink-0 z-30">
                             <div className="flex bg-black/40 rounded-lg p-1 border border-white/10">
                                 <button onClick={() => setViewMode('3d')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === '3d' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>3D</button>
@@ -854,4 +949,4 @@
         const root = createRoot(document.getElementById('root')); root.render(<App />);
     </script>
 </body>
-</html>
+</html>"

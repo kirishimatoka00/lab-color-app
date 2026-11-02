@@ -7,27 +7,16 @@ import * as XLSX from '@e965/xlsx';
 import './index.css';
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry';
 import { Plus, Trash2, RotateCcw, Info, Box, Camera, Maximize, Minimize, Tag, Eye, EyeOff, LayoutTemplate, Square, Circle, Target, X, Aperture, Upload, Image as ImageIcon, CornerRightDown, FileSpreadsheet, Download, CheckSquare as CheckSquareIcon, SlidersHorizontal, Sun, Droplet, List, FileDown, FileUp } from 'lucide-react';
-import { Capacitor } from '@capacitor/core';
-import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Share } from '@capacitor/share';
 import robotoFontUrl from '@fontsource/roboto/files/roboto-latin-700-normal.woff?url';
 
 // 3D 標籤字型改用本機打包的檔案（drei 預設會從網路 CDN 下載，離線時整個畫布會卡住）
 const LABEL_FONT = new URL(robotoFontUrl, document.baseURI).href;
 
 /**
- * 檔案儲存：
- * - Android APK（Capacitor 原生）：WebView 不支援 <a download>，改為寫入快取後呼叫系統分享面板
- *   （可選擇「儲存到雲端硬碟 / 檔案」、LINE、Email 等）。
- * - 一般瀏覽器：沿用原本的下載行為。
+ * 檔案儲存：以瀏覽器下載的方式存檔。
  * dataBase64 為不含 data: 前綴的 base64 字串。
  */
 const saveFile = async (fileName, dataBase64, mimeType) => {
-    if (Capacitor.isNativePlatform()) {
-        const written = await Filesystem.writeFile({ path: fileName, data: dataBase64, directory: Directory.Cache });
-        await Share.share({ title: fileName, url: written.uri, dialogTitle: fileName });
-        return;
-    }
     const bytes = Uint8Array.from(atob(dataBase64), c => c.charCodeAt(0));
     const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
     const link = document.createElement('a');

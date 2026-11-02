@@ -1,27 +1,21 @@
 # Lab Gamut Simulator（Lab 色域模擬器）
 
-在 Lab 色彩空間中輸入 Base / History / Test 點，即時以 3D 與 2D 檢視色域範圍、ΔE 與色域修正量。支援 Excel 匯入／匯出、相機取色，並可打包成 Android APK 安裝在手機上。
+在 Lab 色彩空間中輸入 Base / History / Test 點，即時以 3D 與 2D 檢視色域範圍、ΔE 與色域修正量。支援 Excel 匯入／匯出、相機取色，為純網頁版。
 
-## 在手機上安裝 APK
+## 使用方式
 
-1. 到本 repo 的 **Releases** 頁面，下載最新的 `lab-color-app.apk`（標籤為 `latest`）。
-2. 用手機開啟下載的 APK，依提示允許「安裝未知來源應用程式」後安裝。
-3. 之後有新版本時直接下載新的 APK 覆蓋安裝即可（簽章固定，資料不會消失）。
-
-APK 由 GitHub Actions 自動建置：每次推送到 `main`，或在 **Actions → Build Android APK → Run workflow** 手動執行，都會產生新的 APK。建置約需 5～10 分鐘。
-
-> 這個 APK 使用 repo 內公開的固定 keystore（`android/keystore/debug.keystore`）簽署，僅供個人／內部自用，不適合上架 Google Play。
+純網頁版，不需安裝：用瀏覽器開啟網頁即可（桌機、平板、手機瀏覽器皆可）。根目錄的 `index.html` 是已打包好的單一檔案，程式、樣式與字型都內嵌在裡面，可發佈到 GitHub Pages（從 `main` 根目錄發佈），也可以直接下載後雙擊開啟。
 
 ## 手機版面
 
 - 手機（寬度小於 768px）：底部分頁切換 **Points（資料）** 與 **Viewer（視圖）**；視圖右上角的全螢幕按鈕可放大單一視圖。
 - 平板與桌機：維持左右並排。
-- 匯出 Excel／儲存截圖：在 APK 內會開啟系統分享面板，可儲存到檔案、雲端硬碟或傳給其他 App。
+- 匯出 Excel／儲存截圖：以瀏覽器下載的方式存檔。
 
 ## 相機取色
 
 - **範圍平均取色**：畫面上有明確的白色範圍框，框內所有像素以「線性光」平均後轉成 Lab（和色彩量測儀器同樣的算法），框外會變暗。底部「Area」滑桿可調整範圍大小（3%～40%，會記住上次設定），並顯示取樣的像素大小與範圍內顏色是否均勻（Uniform / Slight variation / Uneven）。
-- **鏡頭與變焦**：手機有多個後鏡頭時，畫面下方會出現 `Lens 1 / 2 / 3` 按鈕切換鏡頭，預設使用編號最小的後鏡頭（通常是 1x 主鏡頭），選擇會被記住；鏡頭支援變焦時另有 `0.5x / 1x / 2x…` 按鈕，開啟時預設回到 1x。畫面底部會顯示目前鏡頭的名稱。
+- **鏡頭與變焦**：手機瀏覽器有多個後鏡頭時，畫面下方會出現 `Lens 1 / 2 / 3` 按鈕切換鏡頭，預設使用編號最小的後鏡頭（通常是 1x 主鏡頭），選擇會被記住；鏡頭支援變焦時另有 `0.5x / 1x / 2x…` 按鈕，開啟時預設回到 1x。畫面底部會顯示目前鏡頭的名稱。
 - **相簿取色**：從相簿選圖後，點選或拖曳即可移動範圍框，範圍框同樣會取區域平均。
 
 ## 材質欄位
@@ -62,26 +56,18 @@ View Settings 內列出所有出現過的材質：點選標籤可在視圖中隱
 
 ```bash
 npm install
-npm run dev        # 開發伺服器
-npm run build      # 打包網頁到 dist/
+npm run dev        # 開發伺服器（開啟 /app.html）
+npm run build      # 打包並更新根目錄的 index.html 與 favicon.png
 ```
 
-## 本機建置 APK（選用）
-
-需要 JDK 21 與 Android SDK（或直接用 Android Studio）。
-
-```bash
-npm run android:sync          # 打包網頁並同步到 android/
-cd android && ./gradlew assembleDebug
-# 輸出：android/app/build/outputs/apk/debug/app-debug.apk
-```
+修改程式後請執行 `npm run build` 並一併提交更新後的 `index.html`，網頁版才會是最新內容。
 
 ## 專案結構
 
 | 路徑 | 說明 |
 | --- | --- |
+| `index.html` | 打包好的網頁版（單一檔案，直接發佈用，由建置產生） |
+| `app.html` | 開發用入口（Vite） |
 | `src/main.jsx` | 應用程式主體（React + react-three-fiber） |
 | `src/index.css` | Tailwind 與全域樣式 |
-| `capacitor.config.json` | Capacitor 設定（App 名稱、ID、狀態列） |
-| `android/` | Capacitor 產生的 Android 專案（相機權限、簽章、圖示已設定） |
-| `.github/workflows/build-apk.yml` | 自動建置 APK 並發佈到 Releases |
+| `scripts/publish-web.mjs` | 把打包結果複製成根目錄 `index.html` |

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import * as XLSX from '@e965/xlsx';
 import './index.css';
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry';
-import { Plus, Trash2, RotateCcw, Info, Box, Camera, Maximize, Minimize, Tag, Eye, EyeOff, LayoutTemplate, Square, Circle, Target, X, Aperture, Upload, Image as ImageIcon, CornerRightDown, FileSpreadsheet, Download, CheckSquare as CheckSquareIcon, SlidersHorizontal, Sun, Droplet, List, FileDown, FileUp } from 'lucide-react';
+import { Plus, Trash2, RotateCcw, Info, Box, Camera, Maximize, Minimize, Tag, Eye, EyeOff, LayoutTemplate, Square, Circle, Target, X, Aperture, Upload, Image as ImageIcon, CornerRightDown, FileSpreadsheet, Download, CheckSquare as CheckSquareIcon, SlidersHorizontal, Sun, Droplet, List, FileDown, FileUp, ChevronDown, ChevronRight } from 'lucide-react';
 import robotoFontUrl from '@fontsource/roboto/files/roboto-latin-700-normal.woff?url';
 
 // 3D 標籤字型改用本機打包的檔案（drei 預設會從網路 CDN 下載，離線時整個畫布會卡住）
@@ -1127,7 +1127,7 @@ const InputRow = ({ point, onChange, onDelete, isTestPoint = false, inputColorCl
 
     return (
         <div className={`flex flex-col mb-2 bg-white p-2 rounded-lg shadow-sm border group transition-colors ${isStandard ? 'border-yellow-400 bg-yellow-50' : 'border-gray-100 hover:border-blue-300'}`}>
-            <div className="mb-2 flex items-center border-b border-gray-100 pb-1">
+            <div className="mb-2 flex flex-wrap items-center gap-y-1 border-b border-gray-100 pb-1">
                 <div className="mr-2 flex items-center gap-1 border-r border-gray-100 pr-2">
                     {isTestPoint ? (
                         <>
@@ -1153,10 +1153,12 @@ const InputRow = ({ point, onChange, onDelete, isTestPoint = false, inputColorCl
                         </>
                     )}
                 </div>
-                <span className="text-[10px] text-gray-400 font-bold mr-1">Name:</span>
-                <input type="text" placeholder="Name" value={point.name || ''} onChange={(e) => handleChange('name', e.target.value)} className={`flex-1 min-w-0 md:flex-none md:w-16 text-sm md:text-xs font-medium focus:outline-none placeholder-gray-300 bg-transparent ${inputColorClass}`} />
-                {isTestPoint && !isStandard && deltaE && <div className="ml-auto bg-gray-100 px-1.5 py-0.5 rounded text-[10px] font-mono text-gray-600 flex items-center"><span className="font-bold text-gray-400 mr-1">ΔE</span><span className={parseFloat(deltaE) > 5 ? "text-red-500 font-bold" : "text-gray-800"}>{deltaE}</span></div>}
-                {isStandard && <div className="ml-auto bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded text-[10px] font-bold">STD</div>}
+                <div className="flex flex-1 items-center min-w-[14rem]">
+                    <span className="text-[10px] text-gray-400 font-bold mr-1">Name:</span>
+                    <input type="text" placeholder="Name" value={point.name || ''} onChange={(e) => handleChange('name', e.target.value)} title={point.name || ''} className={`flex-1 min-w-0 text-sm md:text-xs font-medium focus:outline-none placeholder-gray-300 bg-transparent text-ellipsis ${inputColorClass}`} />
+                </div>
+                {isTestPoint && !isStandard && deltaE && <div className="ml-auto shrink-0 bg-gray-100 px-1.5 py-0.5 rounded text-[10px] font-mono text-gray-600 flex items-center"><span className="font-bold text-gray-400 mr-1">ΔE</span><span className={parseFloat(deltaE) > 5 ? "text-red-500 font-bold" : "text-gray-800"}>{deltaE}</span></div>}
+                {isStandard && <div className="ml-auto shrink-0 bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded text-[10px] font-bold">STD</div>}
             </div>
             <div className="mb-2 flex items-center gap-1 border-b border-gray-100 pb-1">
                 <span className="text-[10px] text-gray-400 font-bold mr-1">Material:</span>
@@ -1248,6 +1250,10 @@ function App() {
     const [basePoints, setBasePoints] = useState(() => getInitialData('lab_basePoints', [{ id: 1, l: 80, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 2, l: 20, a: 0, b: 0, name: '', visible: true, showPoint: true }, { id: 3, l: 50, a: 80, b: 60, name: '', visible: true, showPoint: true }, { id: 4, l: 50, a: -60, b: -40, name: '', visible: true, showPoint: true }]));
     const [historyPoints, setHistoryPoints] = useState(() => getInitialData('lab_historyPoints', [{ id: 501, l: 60, a: 40, b: -20, name: 'Old Mix', visible: true, showPoint: true }]));
     const [testPoints, setTestPoints] = useState(() => getInitialData('lab_testPoints', [{ id: 101, l: 55, a: 10, b: 10, name: 'Sample A', showPoint: true, isStandard: false }, { id: 102, l: 50, a: 15, b: 5, name: 'Sample B', showPoint: true, isStandard: false }]));
+    // Base / History 區塊可摺疊（只收起輸入欄位，不影響色域計算與視圖顯示），狀態會被記住
+    const [collapsed, setCollapsed] = useState(() => { const v = getInitialData('lab_collapsed', {}); return v && typeof v === 'object' ? v : {}; });
+    useEffect(() => { try { window.localStorage.setItem('lab_collapsed', JSON.stringify(collapsed)); } catch (e) {} }, [collapsed]);
+    const toggleCollapsed = (key) => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
     const [showLabels, setShowLabels] = useState(false);
     // 桌機／平板左右並排時，中間分隔線可拖曳調整左側寬度（以比例儲存，視窗縮放時仍合理）
     const [leftFrac, setLeftFrac] = useState(() => { const v = getInitialData('lab_leftFrac', 0.5); return typeof v === 'number' && v > 0.1 && v < 0.9 ? v : 0.5; });
@@ -1601,9 +1607,10 @@ function App() {
                 </div>
                 <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-4 md:space-y-6 custom-scrollbar min-w-0 overscroll-contain">
                     <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex flex-col md:max-h-[320px]">
-                        <div className="flex justify-between items-center mb-3 flex-shrink-0">
+                        <div className={`flex justify-between items-center flex-shrink-0 ${collapsed.base ? '' : 'mb-3'}`}>
                             <div className="flex items-center gap-2">
-                                <h2 className="text-sm font-bold flex items-center gap-2 text-slate-700"><div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm"></div> Base Points</h2>
+                                <button onClick={() => toggleCollapsed('base')} className="w-8 h-8 md:w-6 md:h-6 -ml-1 flex items-center justify-center rounded text-gray-500 hover:bg-black/5 transition-colors" title={collapsed.base ? '展開' : '摺疊'} aria-expanded={!collapsed.base}>{collapsed.base ? <ChevronRight size={16} /> : <ChevronDown size={16} />}</button>
+                                <h2 className="text-sm font-bold flex items-center gap-2 text-slate-700"><div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm"></div> Base Points</h2>{collapsed.base && <span className="text-[11px] font-medium text-gray-400 ml-1">({basePoints.length})</span>}
                                 <div className="flex items-center gap-1 ml-2 border-l border-slate-200 pl-2">
                                     <button onClick={() => toggleAll('base', 'visible')} className={`w-8 h-8 md:w-5 md:h-5 flex items-center justify-center rounded hover:bg-blue-100 transition-colors ${isAllChecked(basePoints, 'visible') ? 'text-blue-600' : 'text-gray-400'}`} title="Select/Deselect All Gamut">{isAllChecked(basePoints, 'visible') ? <CheckSquareIcon size={14} /> : <Square size={14} />}</button>
                                     <button onClick={() => toggleAll('base', 'showPoint')} className={`w-8 h-8 md:w-5 md:h-5 flex items-center justify-center rounded hover:bg-blue-100 transition-colors ${isAllChecked(basePoints, 'showPoint') ? 'text-gray-600' : 'text-gray-400'}`} title="Show/Hide All Points"><Eye size={14} /></button>
@@ -1611,13 +1618,14 @@ function App() {
                             </div>
                             <button onClick={() => addPoint('base')} className="flex items-center gap-1 text-xs bg-white border border-blue-200 hover:border-blue-400 text-blue-600 px-3.5 py-2.5 md:px-3 md:py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button>
                         </div>
-                        <div className="space-y-1 md:overflow-y-auto md:pr-2 custom-scrollbar flex-1">{basePoints.map(p => <InputRow key={p.id} point={p} onChange={(id, f, v) => updatePoint('base', id, f, v)} onDelete={(id) => deletePoint('base', id)} />)}</div>
+                        {!collapsed.base && <div className="space-y-1 md:overflow-y-auto md:pr-2 custom-scrollbar flex-1">{basePoints.map(p => <InputRow key={p.id} point={p} onChange={(id, f, v) => updatePoint('base', id, f, v)} onDelete={(id) => deletePoint('base', id)} />)}</div>}
                     </div>
                     
                     <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex flex-col md:max-h-[320px]">
-                        <div className="flex justify-between items-center mb-3 flex-shrink-0">
+                        <div className={`flex justify-between items-center flex-shrink-0 ${collapsed.history ? '' : 'mb-3'}`}>
                             <div className="flex items-center gap-2">
-                                <h2 className="text-sm font-bold flex items-center gap-2 text-orange-900"><div className="w-2.5 h-2.5 rounded-full bg-orange-500 shadow-sm"></div> History Points</h2>
+                                <button onClick={() => toggleCollapsed('history')} className="w-8 h-8 md:w-6 md:h-6 -ml-1 flex items-center justify-center rounded text-gray-500 hover:bg-black/5 transition-colors" title={collapsed.history ? '展開' : '摺疊'} aria-expanded={!collapsed.history}>{collapsed.history ? <ChevronRight size={16} /> : <ChevronDown size={16} />}</button>
+                                <h2 className="text-sm font-bold flex items-center gap-2 text-orange-900"><div className="w-2.5 h-2.5 rounded-full bg-orange-500 shadow-sm"></div> History Points</h2>{collapsed.history && <span className="text-[11px] font-medium text-gray-400 ml-1">({historyPoints.length})</span>}
                                 <div className="flex items-center gap-1 ml-2 border-l border-orange-200 pl-2">
                                     <button onClick={() => toggleAll('history', 'visible')} className={`w-8 h-8 md:w-5 md:h-5 flex items-center justify-center rounded hover:bg-orange-200 transition-colors ${isAllChecked(historyPoints, 'visible') ? 'text-blue-600' : 'text-gray-400'}`} title="Select/Deselect All Gamut">{isAllChecked(historyPoints, 'visible') ? <CheckSquareIcon size={14} /> : <Square size={14} />}</button>
                                     <button onClick={() => toggleAll('history', 'showPoint')} className={`w-8 h-8 md:w-5 md:h-5 flex items-center justify-center rounded hover:bg-orange-200 transition-colors ${isAllChecked(historyPoints, 'showPoint') ? 'text-gray-600' : 'text-gray-400'}`} title="Show/Hide All Points"><Eye size={14} /></button>
@@ -1625,7 +1633,7 @@ function App() {
                             </div>
                             <button onClick={() => addPoint('history')} className="flex items-center gap-1 text-xs bg-white border border-orange-200 hover:border-orange-400 text-orange-600 px-3.5 py-2.5 md:px-3 md:py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button>
                         </div>
-                        <div className="space-y-1 md:overflow-y-auto md:pr-2 custom-scrollbar flex-1">{historyPoints.map(p => <InputRow key={p.id} point={p} inputColorClass="text-orange-700" onChange={(id, f, v) => updatePoint('history', id, f, v)} onDelete={(id) => deletePoint('history', id)} />)}</div>
+                        {!collapsed.history && <div className="space-y-1 md:overflow-y-auto md:pr-2 custom-scrollbar flex-1">{historyPoints.map(p => <InputRow key={p.id} point={p} inputColorClass="text-orange-700" onChange={(id, f, v) => updatePoint('history', id, f, v)} onDelete={(id) => deletePoint('history', id)} />)}</div>}
                     </div>
                     
                     <div className="bg-purple-50 p-3 rounded-xl border border-purple-100 flex flex-col md:max-h-[40vh]">

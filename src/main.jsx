@@ -238,9 +238,10 @@ const GamutUtils = {
     },
 
     // 判定 In Gamut，並計算三種修正：
-    //  A：Chroma 維持、調整 Hue 到最接近且在 Gamut 內的 a,b（同 L）
-    //  B：Hue 維持、降低 Chroma 到剛好在 Gamut 內的 a,b（同 L）
-    //  C：最小 ΔE（建議）。projection 模式＝同 L 下 a-b 平面最近點；
+    //  （程式內部鍵名 A/B/C，畫面顯示為 C1/C2/C3）
+    //  A＝C1：Chroma 維持、調整 Hue 到最接近且在 Gamut 內的 a,b（同 L）
+    //  B＝C2：Hue 維持、降低 Chroma 到剛好在 Gamut 內的 a,b（同 L）
+    //  C＝C3：最小 ΔE（建議）。projection 模式＝同 L 下 a-b 平面最近點；
     //     slice 模式＝保持 Hue、L 與 Chroma 皆可調的最近點（HPMINDE）
     // mode='projection'：假設 a,b 不隨 L 改變，ΔL 恆為 0；mode='slice'：使用同 L 截面，L 超出範圍時先移到最近可用 L
     calculateCorrections: (pt, mesh, mode = 'projection') => {
@@ -283,7 +284,7 @@ const GamutUtils = {
             if (q) Cc = make(Lc, q[0], q[1]);
         }
 
-        // L 超出範圍但 a,b 已在該截面內：A、B 只需調整 L
+        // L 超出範圍但 a,b 已在該截面內：C1、C2 只需調整 L
         if (inside) { const same = make(Lc, pt.a, pt.b); return { isInside: false, A: same, B: same, C: Cc }; }
 
         // A：與半徑 C 的圓相交的各邊交點，取色相角最近者
@@ -856,7 +857,7 @@ const ToggleSwitch = ({ checked, onChange, disabled = false }) => (
     </button>
 );
 
-const GamutDisplayPanel = ({ open, onClose, autoL, setAutoL, colorL, setColorL, opacity, setOpacity, gamutMode, setGamutMode, showCorrections, setShowCorrections, materials, hiddenMaterials, toggleMaterial, setHiddenMaterials, colorByMaterial, setColorByMaterial, materialSwatch }) => {
+const GamutDisplayPanel = ({ open, onClose, autoL, setAutoL, colorL, setColorL, opacity, setOpacity, gamutMode, setGamutMode, showCorrections, setShowCorrections, corrShown, toggleCorr, materials, hiddenMaterials, toggleMaterial, setHiddenMaterials, colorByMaterial, setColorByMaterial, materialSwatch }) => {
     if (!open) return null;
     return (
         <div className="absolute top-14 right-4 z-30 w-72 max-h-[75vh] overflow-y-auto bg-[#26262e]/95 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl p-4 space-y-4 tooltip-animate">
@@ -878,12 +879,26 @@ const GamutDisplayPanel = ({ open, onClose, autoL, setAutoL, colorL, setColorL, 
                         <button key={k} onClick={() => setGamutMode(k)} className={`flex-1 px-2 py-1.5 text-[11px] font-bold rounded-md transition-all ${gamutMode === k ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}>{label}</button>
                     ))}
                 </div>
-                <p className="text-[10px] text-white/40 leading-relaxed">{gamutMode === 'slice' ? '以 Test Point 同一 L 的 a-b 截面判定；C 為保持 Hue、L 與 Chroma 可調的最小 ΔE。' : '假設 a,b 不隨 L 改變，以 a-b 投影範圍判定，ΔL 恆為 0。'}</p>
+                <p className="text-[10px] text-white/40 leading-relaxed">{gamutMode === 'slice' ? '以 Test Point 同一 L 的 a-b 截面判定；C3 為保持 Hue、L 與 Chroma 可調的最小 ΔE。' : '假設 a,b 不隨 L 改變，以 a-b 投影範圍判定，ΔL 恆為 0。'}</p>
             </div>
 
-            <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-white/70 uppercase tracking-wider">Show Corrections A/B/C</span>
-                <ToggleSwitch checked={showCorrections} onChange={setShowCorrections} />
+            <div className="space-y-2 pt-1 border-t border-white/10">
+                <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-white/70 uppercase tracking-wider">Show Correction Lines</span>
+                    <ToggleSwitch checked={showCorrections} onChange={setShowCorrections} />
+                </div>
+                <span className="text-[11px] font-bold text-white/70 uppercase tracking-wider block">Corrections to show</span>
+                <div className="flex gap-1.5">
+                    {CORR_STYLES.map(([k, col]) => {
+                        const on = corrShown.includes(k);
+                        return (
+                            <button key={k} onClick={() => toggleCorr(k)} className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[11px] font-bold rounded-md border transition-all ${on ? 'text-white' : 'border-white/10 text-white/30'}`} style={on ? { borderColor: col, background: col + '33' } : {}}>
+                                <span className="inline-block w-2 h-2 rounded-full" style={{ background: on ? col : '#6b7280' }} />{CORR_NAMES[k]}
+                            </button>
+                        );
+                    })}
+                </div>
+                <p className="text-[10px] text-white/40 leading-relaxed">選取的修正會同時顯示在 Test Point 卡片與 3D / 2D 視圖。</p>
             </div>
 
             <div className="space-y-2 pt-1 border-t border-white/10">
@@ -980,14 +995,18 @@ const ScreenshotHandler = ({ captureRef }) => {
 };
 
 const CORR_STYLES = [['A', '#f97316'], ['B', '#22d3ee'], ['C', '#4ade80']];
-// 把超出 Gamut 的 Test Point 連到修正點 A / B / C
-const CorrectionLinks = ({ testPoints, mode }) => {
+// 內部鍵名 A/B/C 在畫面上顯示為 C1/C2/C3
+const CORR_NAMES = { A: 'C1', B: 'C2', C: 'C3' };
+const CORR_KEYS = ['A', 'B', 'C'];
+// 把超出 Gamut 的 Test Point 連到修正點 C1 / C2 / C3（只畫被選取顯示的）
+const CorrectionLinks = ({ testPoints, mode, shown = CORR_KEYS }) => {
     const pos = (q) => mode === '2d' ? [q.a, q.b, 0.5] : [q.a, q.l, q.b];
     const items = [];
     testPoints.forEach(p => {
         const g = p.gamutDeltas;
         if (!g || g.isInside || p.showPoint === false) return;
         CORR_STYLES.forEach(([k, col]) => {
+            if (!shown.includes(k)) return;
             const r = g[k];
             if (!r) return;
             const from = pos(p), to = pos(r);
@@ -1003,8 +1022,8 @@ const CorrectionLinks = ({ testPoints, mode }) => {
                     <mesh position={to}><sphereGeometry args={[2, 16, 16]} /><meshBasicMaterial color={col} /></mesh>
                     <group position={to}>
                         {mode === '3d'
-                            ? <Billboard position={[0, 4, 0]}><Text font={LABEL_FONT} fontSize={3.5} color={col} outlineWidth={0.2} outlineColor="black">{k}</Text></Billboard>
-                            : <Text font={LABEL_FONT} position={[0, 4, 0]} fontSize={3.5} color={col} outlineWidth={0.25} outlineColor="black">{k}</Text>}
+                            ? <Billboard position={[0, 4, 0]}><Text font={LABEL_FONT} fontSize={3.5} color={col} outlineWidth={0.2} outlineColor="black">{CORR_NAMES[k]}</Text></Billboard>
+                            : <Text font={LABEL_FONT} position={[0, 4, 0]} fontSize={3.5} color={col} outlineWidth={0.25} outlineColor="black">{CORR_NAMES[k]}</Text>}
                     </group>
                 </group>
             ))}
@@ -1012,7 +1031,7 @@ const CorrectionLinks = ({ testPoints, mode }) => {
     );
 };
 
-const Scene3D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels, gamutColorL, gamutAutoL, gamutOpacity, showCorrections, matShown, matColor }) => {
+const Scene3D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels, gamutColorL, gamutAutoL, gamutOpacity, showCorrections, corrShown, matShown, matColor }) => {
     const gamutPoints = useMemo(() => [...basePoints.filter(p=>p.visible!==false), ...historyPoints.filter(p=>p.visible!==false)], [basePoints, historyPoints]);
     const renderBase = useMemo(() => basePoints.filter(p => p.showPoint !== false && matShown(p)), [basePoints, matShown]);
     const renderHistory = useMemo(() => historyPoints.filter(p => p.showPoint !== false && matShown(p)), [historyPoints, matShown]);
@@ -1028,13 +1047,13 @@ const Scene3D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels
             {renderBase.map((p) => <LabPoint key={p.id} {...p} matColor={matColor(p)} mode="3d" showLabels={showLabels} typeLabel="Base" />)}
             {renderHistory.map((p) => <LabPoint key={p.id} {...p} matColor={matColor(p)} mode="3d" showLabels={showLabels} typeLabel="Hist" />)}
             {renderTest.map((p) => <LabPoint key={p.id} {...p} matColor={matColor(p)} mode="3d" isTestPoint={true} showLabels={showLabels} />)}
-            {showCorrections && <CorrectionLinks testPoints={renderTest} mode="3d" />}
+            {showCorrections && <CorrectionLinks testPoints={renderTest} mode="3d" shown={corrShown} />}
             <GamutVolume points={gamutPoints} mode="3d" colorL={gamutColorL} autoL={gamutAutoL} opacity={gamutOpacity} />
         </>
     );
 };
 
-const Scene2D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels, gamutColorL, gamutAutoL, gamutOpacity, showCorrections, matShown, matColor }) => {
+const Scene2D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels, gamutColorL, gamutAutoL, gamutOpacity, showCorrections, corrShown, matShown, matColor }) => {
     const gamutPoints = useMemo(() => [...basePoints.filter(p=>p.visible!==false), ...historyPoints.filter(p=>p.visible!==false)], [basePoints, historyPoints]);
     const renderBase = useMemo(() => basePoints.filter(p => p.showPoint !== false && matShown(p)), [basePoints, matShown]);
     const renderHistory = useMemo(() => historyPoints.filter(p => p.showPoint !== false && matShown(p)), [historyPoints, matShown]);
@@ -1049,13 +1068,13 @@ const Scene2D = ({ basePoints, historyPoints, testPoints, captureRef, showLabels
             {renderBase.map((p) => <LabPoint key={p.id} {...p} matColor={matColor(p)} mode="2d" showLabels={showLabels} typeLabel="Base" />)}
             {renderHistory.map((p) => <LabPoint key={p.id} {...p} matColor={matColor(p)} mode="2d" showLabels={showLabels} typeLabel="Hist" />)}
             {renderTest.map((p) => <LabPoint key={p.id} {...p} matColor={matColor(p)} mode="2d" isTestPoint={true} showLabels={showLabels} />)}
-            {showCorrections && <CorrectionLinks testPoints={renderTest} mode="2d" />}
+            {showCorrections && <CorrectionLinks testPoints={renderTest} mode="2d" shown={corrShown} />}
             <GamutVolume points={gamutPoints} mode="2d" colorL={gamutColorL} autoL={gamutAutoL} opacity={gamutOpacity} />
         </>
     );
 };
 
-const InputRow = ({ point, onChange, onDelete, isTestPoint = false, inputColorClass = 'text-blue-700', deltaE, isStandard, onToggleStandard }) => {
+const InputRow = ({ point, onChange, onDelete, isTestPoint = false, inputColorClass = 'text-blue-700', deltaE, isStandard, onToggleStandard, corrShown = CORR_KEYS }) => {
     const colorPreview = ColorUtils.labToHex(point.l, point.a, point.b);
     const handleChange = (field, value) => {
         if (field === 'name' || field === 'material' || field === 'visible' || field === 'showPoint') { onChange(point.id, field, value); return; }
@@ -1194,10 +1213,10 @@ const InputRow = ({ point, onChange, onDelete, isTestPoint = false, inputColorCl
                             <span className="font-bold text-slate-500">Out of Gamut（Gamut 範圍不足以計算）</span>
                         ) : (
                             <div className="flex flex-col w-full">
-                                <span className="font-bold text-orange-600 flex items-center gap-1"><CornerRightDown size={10}/> Out of Gamut — Correction A / B / C</span>
-                                {row('A', 'Chroma 維持・調整 Hue', g.A, '#f97316')}
-                                {row('B', 'Hue 維持・降低 Chroma', g.B, '#22d3ee')}
-                                {row('C 建議', '最小 ΔE（最近點）', g.C, '#4ade80')}
+                                <span className="font-bold text-orange-600 flex items-center gap-1"><CornerRightDown size={10}/> Out of Gamut — Correction {CORR_KEYS.filter(k => corrShown.includes(k)).map(k => CORR_NAMES[k]).join(' / ') || '（未選擇顯示）'}</span>
+                                {corrShown.includes('A') && row('C1', 'Chroma 維持・調整 Hue', g.A, '#f97316')}
+                                {corrShown.includes('B') && row('C2', 'Hue 維持・降低 Chroma', g.B, '#22d3ee')}
+                                {corrShown.includes('C') && row('C3 建議', '最小 ΔE（最近點）', g.C, '#4ade80')}
                             </div>
                         )}
                     </div>
@@ -1230,6 +1249,41 @@ function App() {
     const [historyPoints, setHistoryPoints] = useState(() => getInitialData('lab_historyPoints', [{ id: 501, l: 60, a: 40, b: -20, name: 'Old Mix', visible: true, showPoint: true }]));
     const [testPoints, setTestPoints] = useState(() => getInitialData('lab_testPoints', [{ id: 101, l: 55, a: 10, b: 10, name: 'Sample A', showPoint: true, isStandard: false }, { id: 102, l: 50, a: 15, b: 5, name: 'Sample B', showPoint: true, isStandard: false }]));
     const [showLabels, setShowLabels] = useState(false);
+    // 桌機／平板左右並排時，中間分隔線可拖曳調整左側寬度（以比例儲存，視窗縮放時仍合理）
+    const [leftFrac, setLeftFrac] = useState(() => { const v = getInitialData('lab_leftFrac', 0.5); return typeof v === 'number' && v > 0.1 && v < 0.9 ? v : 0.5; });
+    useEffect(() => { try { window.localStorage.setItem('lab_leftFrac', JSON.stringify(leftFrac)); } catch (e) {} }, [leftFrac]);
+    const MIN_PANE = 320;
+    const clampFrac = (f, total) => {
+        const lo = Math.min(0.5, MIN_PANE / total), hi = Math.max(0.5, 1 - MIN_PANE / total);
+        return Math.min(hi, Math.max(lo, f));
+    };
+    const startDividerDrag = (e) => {
+        const container = e.currentTarget.parentElement;
+        const handle = e.currentTarget;
+        handle.setPointerCapture(e.pointerId);
+        const onMove = (ev) => {
+            const rect = container.getBoundingClientRect();
+            setLeftFrac(clampFrac((ev.clientX - rect.left) / rect.width, rect.width));
+        };
+        const onUp = () => {
+            handle.removeEventListener('pointermove', onMove);
+            handle.removeEventListener('pointerup', onUp);
+            handle.removeEventListener('pointercancel', onUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        handle.addEventListener('pointermove', onMove);
+        handle.addEventListener('pointerup', onUp);
+        handle.addEventListener('pointercancel', onUp);
+    };
+    const onDividerKey = (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        const total = e.currentTarget.parentElement.getBoundingClientRect().width;
+        setLeftFrac(f => clampFrac(f + (e.key === 'ArrowLeft' ? -0.02 : 0.02), total));
+    };
     const [viewMode, setViewMode] = useState('split');
     const [showCamera, setShowCamera] = useState(false);
     const [mobileTab, setMobileTab] = useState('data');
@@ -1245,16 +1299,22 @@ function App() {
     const [showGamutPanel, setShowGamutPanel] = useState(false);
     const [gamutMode, setGamutMode] = useState(() => getInitialData('lab_gamutMode', 'projection'));
     const [showCorrections, setShowCorrections] = useState(() => getInitialData('lab_showCorrections', true));
+    const [corrShown, setCorrShown] = useState(() => {
+        const v = getInitialData('lab_corrShown', CORR_KEYS);
+        return Array.isArray(v) ? CORR_KEYS.filter(k => v.includes(k)) : CORR_KEYS;
+    });
+    const toggleCorr = (k) => setCorrShown(prev => CORR_KEYS.filter(x => (x === k ? !prev.includes(x) : prev.includes(x))));
     const [colorByMaterial, setColorByMaterial] = useState(() => getInitialData('lab_colorByMaterial', false));
     const [hiddenMaterials, setHiddenMaterials] = useState(() => getInitialData('lab_hiddenMaterials', []));
     useEffect(() => {
         try {
             window.localStorage.setItem('lab_gamutMode', JSON.stringify(gamutMode));
             window.localStorage.setItem('lab_showCorrections', JSON.stringify(showCorrections));
+            window.localStorage.setItem('lab_corrShown', JSON.stringify(corrShown));
             window.localStorage.setItem('lab_colorByMaterial', JSON.stringify(colorByMaterial));
             window.localStorage.setItem('lab_hiddenMaterials', JSON.stringify(hiddenMaterials));
         } catch (e) {}
-    }, [gamutMode, showCorrections, colorByMaterial, hiddenMaterials]);
+    }, [gamutMode, showCorrections, corrShown, colorByMaterial, hiddenMaterials]);
     useEffect(() => { window.localStorage.setItem('lab_gamutColorL', JSON.stringify(gamutColorL)); window.localStorage.setItem('lab_gamutOpacity', JSON.stringify(gamutOpacity)); }, [gamutColorL, gamutOpacity]);
     
     // Gamut Calculation Mesh (Memoized)
@@ -1408,13 +1468,14 @@ function App() {
             XLSX.utils.book_append_sheet(wb, wsHist, "History Points");
         }
         if (testPoints.length > 0) {
-            // Test Points 另外附上 In Gamut 狀態與 A/B/C 修正結果（匯入時會忽略這些欄位）
+            // Test Points 另外附上 In Gamut 狀態與 C1/C2/C3 修正結果（匯入時會忽略這些欄位）
             const corrCols = (p) => {
                 const g = (processedTestPoints.find(q => q.id === p.id) || {}).gamutDeltas;
                 const out = { InGamut: !g ? 'N/A' : (g.isInside ? 'Yes' : 'No') };
-                ['A', 'B', 'C'].forEach(k => {
+                CORR_KEYS.forEach(k => {
                     const r = g && !g.isInside ? g[k] : null;
-                    out[`${k}_L`] = r ? +r.l.toFixed(2) : ''; out[`${k}_a`] = r ? +r.a.toFixed(2) : ''; out[`${k}_b`] = r ? +r.b.toFixed(2) : '';
+                    const n = CORR_NAMES[k];
+                    out[`${n}_L`] = r ? +r.l.toFixed(2) : ''; out[`${n}_a`] = r ? +r.a.toFixed(2) : ''; out[`${n}_b`] = r ? +r.b.toFixed(2) : '';
                 });
                 return out;
             };
@@ -1437,9 +1498,9 @@ function App() {
             version: 1,
             exportedAt: new Date().toISOString(),
             points: { base: basePoints, history: historyPoints, test: testPoints },
-            settings: { gamutAutoL, gamutColorL, gamutOpacity, showLabels, viewMode, camRoiPct, gamutMode, showCorrections, colorByMaterial, hiddenMaterials },
+            settings: { gamutAutoL, gamutColorL, gamutOpacity, showLabels, viewMode, camRoiPct, gamutMode, showCorrections, corrShown, colorByMaterial, hiddenMaterials },
             // 計算結果（僅供參考，匯入時不會讀取）
-            corrections: processedTestPoints.map(p => ({ id: p.id, name: p.name, material: p.material || '', inGamut: p.gamutDeltas ? !!p.gamutDeltas.isInside : null, A: p.gamutDeltas && p.gamutDeltas.A || null, B: p.gamutDeltas && p.gamutDeltas.B || null, C: p.gamutDeltas && p.gamutDeltas.C || null }))
+            corrections: processedTestPoints.map(p => ({ id: p.id, name: p.name, material: p.material || '', inGamut: p.gamutDeltas ? !!p.gamutDeltas.isInside : null, C1: p.gamutDeltas && p.gamutDeltas.A || null, C2: p.gamutDeltas && p.gamutDeltas.B || null, C3: p.gamutDeltas && p.gamutDeltas.C || null }))
         };
         const bytes = new TextEncoder().encode(JSON.stringify(payload, null, 2));
         let bin = ''; bytes.forEach(c => { bin += String.fromCharCode(c); });
@@ -1471,6 +1532,7 @@ function App() {
                 if (typeof st.viewMode === 'string') setViewMode(st.viewMode);
                 if (st.gamutMode === 'projection' || st.gamutMode === 'slice') setGamutMode(st.gamutMode);
                 if (typeof st.showCorrections === 'boolean') setShowCorrections(st.showCorrections);
+                if (Array.isArray(st.corrShown)) setCorrShown(CORR_KEYS.filter(k => st.corrShown.includes(k)));
                 if (typeof st.colorByMaterial === 'boolean') setColorByMaterial(st.colorByMaterial);
                 if (Array.isArray(st.hiddenMaterials)) setHiddenMaterials(st.hiddenMaterials.map(String));
                 if (isFinite(st.camRoiPct)) { try { localStorage.setItem('lab_camRoiPct', String(st.camRoiPct)); } catch (err) {} }
@@ -1526,7 +1588,7 @@ function App() {
                 ))}
             </nav>
             
-            <div className={`${mobileTab === 'data' ? 'flex' : 'hidden'} md:flex w-full md:w-1/2 flex-col bg-white border-r border-gray-200 flex-1 min-h-0 md:flex-none md:h-full z-10 shadow-xl overflow-hidden`}>
+            <div className={`${mobileTab === 'data' ? 'flex' : 'hidden'} md:flex w-full flex-col bg-white flex-1 min-h-0 md:flex-none md:h-full z-10 shadow-xl overflow-hidden`} style={isDesktop ? { width: `${leftFrac * 100}%` } : undefined}>
                 <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white flex justify-between items-center flex-shrink-0">
                     <div className="flex items-center gap-2"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-blue-200 shadow-lg">Lab</div><h1 className="text-lg font-bold text-gray-800">Gamut Simulator</h1></div>
                     <div className="flex gap-2">
@@ -1579,9 +1641,17 @@ function App() {
                                 <button onClick={() => addPoint('test')} className="flex items-center gap-1 text-xs bg-white border border-purple-200 hover:border-purple-400 text-purple-600 px-3.5 py-2.5 md:px-3 md:py-1.5 rounded-full shadow-sm transition-all active:scale-95"><Plus size={14} /> <span className="font-medium">Add</span></button>
                             </div>
                         </div>
-                        <div className="space-y-1 md:overflow-y-auto md:pr-2 custom-scrollbar flex-1">{processedTestPoints.map(p => <InputRow key={p.id} point={p} isTestPoint={true} inputColorClass="text-purple-700" isStandard={p.isStandard} deltaE={p.deltaE} onChange={(id, f, v) => updatePoint('test', id, f, v)} onDelete={(id) => deletePoint('test', id)} onToggleStandard={toggleStandard} />)}</div>
+                        <div className="space-y-1 md:overflow-y-auto md:pr-2 custom-scrollbar flex-1">{processedTestPoints.map(p => <InputRow key={p.id} point={p} isTestPoint={true} inputColorClass="text-purple-700" isStandard={p.isStandard} deltaE={p.deltaE} onChange={(id, f, v) => updatePoint('test', id, f, v)} onDelete={(id) => deletePoint('test', id)} onToggleStandard={toggleStandard} corrShown={corrShown} />)}</div>
                     </div>
                 </div>
+            </div>
+            <div
+                role="separator" aria-orientation="vertical" aria-label="調整左右版面寬度（雙擊還原）" tabIndex={0}
+                onPointerDown={startDividerDrag} onKeyDown={onDividerKey} onDoubleClick={() => setLeftFrac(0.5)}
+                className="hidden md:flex w-2 shrink-0 z-20 cursor-col-resize items-center justify-center bg-gray-200 hover:bg-blue-400 active:bg-blue-500 focus:outline-none focus:bg-blue-400 transition-colors touch-none group"
+                title="拖曳調整寬度，雙擊還原"
+            >
+                <div className="w-0.5 h-10 rounded bg-gray-400 group-hover:bg-white/80" />
             </div>
             <div className={`${mobileTab === 'view' ? 'flex' : 'hidden'} md:flex flex-1 relative min-h-0 md:h-full flex-col bg-[#1e1e24] overflow-hidden min-w-0`}>
                 <div className="relative flex items-center justify-center p-2 bg-[#1e1e24] border-b border-white/10 shrink-0 z-30">
@@ -1610,6 +1680,8 @@ function App() {
                         setGamutMode={setGamutMode}
                         showCorrections={showCorrections}
                         setShowCorrections={setShowCorrections}
+                        corrShown={corrShown}
+                        toggleCorr={toggleCorr}
                         materials={materials}
                         hiddenMaterials={hiddenMaterials}
                         toggleMaterial={toggleMaterial}
@@ -1620,8 +1692,8 @@ function App() {
                     />
                 </div>
                 <div className="flex-1 relative flex flex-col">
-                    {(viewMode === '3d' || viewMode === 'split') && <div className={`relative ${viewMode === 'split' ? 'h-1/2 border-b border-white/10' : 'h-full'}`}><ViewContainer title="3D View" onCapture={() => capture3DRef.current && capture3DRef.current()} onToggleLabels={() => setShowLabels(!showLabels)} showLabels={showLabels}><Canvas frameloop={viewActive ? 'always' : 'never'} camera={{ position: [200, 150, 200], fov: 40 }} dpr={[1, 2]}><color attach="background" args={['#1e1e24']} /><Scene3D basePoints={basePoints} historyPoints={historyPoints} testPoints={processedTestPoints} captureRef={capture3DRef} showLabels={showLabels} gamutColorL={gamutColorL} gamutAutoL={gamutAutoL} gamutOpacity={gamutOpacity} showCorrections={showCorrections} matShown={matShown} matColor={matColor} /></Canvas></ViewContainer></div>}
-                    {(viewMode === '2d' || viewMode === 'split') && <div className={`relative ${viewMode === 'split' ? 'h-1/2' : 'h-full'}`}><ViewContainer title="2D View (a-b)" onCapture={() => capture2DRef.current && capture2DRef.current()} onToggleLabels={() => setShowLabels(!showLabels)} showLabels={showLabels}><Canvas frameloop={viewActive ? 'always' : 'never'} orthographic camera={{ position: [0, 0, 100], zoom: 1.5, near: 0.1, far: 1000 }} dpr={[1, 2]}><color attach="background" args={['#18181b']} /><Scene2D basePoints={basePoints} historyPoints={historyPoints} testPoints={processedTestPoints} captureRef={capture2DRef} showLabels={showLabels} gamutColorL={gamutColorL} gamutAutoL={gamutAutoL} gamutOpacity={gamutOpacity} showCorrections={showCorrections} matShown={matShown} matColor={matColor} /></Canvas></ViewContainer></div>}
+                    {(viewMode === '3d' || viewMode === 'split') && <div className={`relative ${viewMode === 'split' ? 'h-1/2 border-b border-white/10' : 'h-full'}`}><ViewContainer title="3D View" onCapture={() => capture3DRef.current && capture3DRef.current()} onToggleLabels={() => setShowLabels(!showLabels)} showLabels={showLabels}><Canvas frameloop={viewActive ? 'always' : 'never'} camera={{ position: [200, 150, 200], fov: 40 }} dpr={[1, 2]}><color attach="background" args={['#1e1e24']} /><Scene3D basePoints={basePoints} historyPoints={historyPoints} testPoints={processedTestPoints} captureRef={capture3DRef} showLabels={showLabels} gamutColorL={gamutColorL} gamutAutoL={gamutAutoL} gamutOpacity={gamutOpacity} showCorrections={showCorrections} corrShown={corrShown} matShown={matShown} matColor={matColor} /></Canvas></ViewContainer></div>}
+                    {(viewMode === '2d' || viewMode === 'split') && <div className={`relative ${viewMode === 'split' ? 'h-1/2' : 'h-full'}`}><ViewContainer title="2D View (a-b)" onCapture={() => capture2DRef.current && capture2DRef.current()} onToggleLabels={() => setShowLabels(!showLabels)} showLabels={showLabels}><Canvas frameloop={viewActive ? 'always' : 'never'} orthographic camera={{ position: [0, 0, 100], zoom: 1.5, near: 0.1, far: 1000 }} dpr={[1, 2]}><color attach="background" args={['#18181b']} /><Scene2D basePoints={basePoints} historyPoints={historyPoints} testPoints={processedTestPoints} captureRef={capture2DRef} showLabels={showLabels} gamutColorL={gamutColorL} gamutAutoL={gamutAutoL} gamutOpacity={gamutOpacity} showCorrections={showCorrections} corrShown={corrShown} matShown={matShown} matColor={matColor} /></Canvas></ViewContainer></div>}
                 </div>
             </div>
         </div>

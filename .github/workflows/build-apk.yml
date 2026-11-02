@@ -1,0 +1,85 @@
+name: Build Android APK
+
+# 每次推送到 main、或在 Actions 頁面手動執行時，自動建置可安裝的 APK。
+# 建置完成後：
+#   1. APK 會附在該次 workflow 的 Artifacts（保留 30 天）
+#   2. 同時更新 Releases 裡的「latest」版本，手機直接開 Releases 頁面就能下載
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APP_VERSION_CODE: ${{ github.run_number }}
+      APP_VERSION_NAME: 1.0.${{ github.run_number }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # GitHub 的 ubuntu-latest 已內建 Android SDK，只需確認授權條款已接受
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Sync web assets into Android project
+        run: npx cap sync android
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk lab-color-app.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab-color-app-apk
+          path: lab-color-app.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish APK to "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create latest lab-color-app.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Latest APK (build ${{ github.run_number }})" \
+            --notes "自動建置的 Android APK（版本 $APP_VERSION_NAME，commit ${GITHUB_SHA::7}）。手機下載後點開即可安裝，需允許「安裝未知來源應用程式」。"

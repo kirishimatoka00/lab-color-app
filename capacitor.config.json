@@ -1,0 +1,14 @@
+{
+  "appId": "com.kirishimatoka00.labcolorapp",
+  "appName": "Lab Gamut",
+  "webDir": "dist",
+  "backgroundColor": "#1e1e24",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "SystemBars": {
+      "style": "DARK"
+    }
+  }
+}
